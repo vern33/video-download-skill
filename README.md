@@ -14,6 +14,7 @@
 - **贴原文就行** —— `2.56 复制打开抖音，看看【xxx的作品】… https://v.douyin.com/xxxx/ :6pm …` 这种分享文本直接丢进来，不用手工清理
 - **一次多条、可混合平台** —— 分通道处理
 - **环境自举** —— 依赖缺失时自动重建 venv 并重入，不会突然失效
+- **跨平台** —— macOS / Linux / Windows 都能跑，不写死任何绝对路径，路径可用环境变量覆盖
 - **输出可追溯** —— 文件名含标题与视频 ID，便于校验
 
 ## 依赖
@@ -70,8 +71,33 @@ python3 scripts/video_dl.py "<抖音链接>" "<YouTube链接>" --quality 720
 ```
 video_dl.py            统一入口：提取链接 → 按平台分发
 ├── _douyin.py         抖音通道：Playwright Chromium + CDP
+├── _env.py            跨平台环境探测：venv / 解释器 / 浏览器
 └── yt-dlp             通用通道（以子进程调用）
 ```
+
+### 跨平台与环境变量
+
+`_env.py` 负责所有路径推导，按平台自动选择默认位置：
+
+| 平台 | 默认 venv |
+|---|---|
+| macOS / Linux | `~/.cache/video-download/venv`（遵循 `XDG_CACHE_HOME`） |
+| Windows | `%LOCALAPPDATA%\video-download\venv` |
+
+需要改路径时用环境变量，**不用改代码**：
+
+| 变量 | 作用 |
+|---|---|
+| `VIDEO_DL_VENV` | 直接指定 venv 目录（优先级最高） |
+| `VIDEO_DL_HOME` | 数据目录，venv 建在其下的 `venv/` |
+| `VIDEO_DL_BOOTSTRAP_PY` | 建 venv 用的基础解释器 |
+| `VIDEO_DL_BROWSER` | 直接指定浏览器可执行文件 |
+| `PLAYWRIGHT_BROWSERS_PATH` | Playwright 官方变量，同样被识别 |
+
+浏览器按「`VIDEO_DL_BROWSER` → Playwright 缓存 → PATH」的顺序查找，优先用
+`headless_shell`（纯二进制，启动最快）。
+
+venv 只在**下抖音时**才会按需创建；只下 YouTube / B站等站点不会产生任何 venv。
 
 ### 为什么抖音要单独走浏览器
 
@@ -103,9 +129,10 @@ video_dl.py            统一入口：提取链接 → 按平台分发
 | 抖音「浏览器 CDP 端口没起来」 | 检查 `--no-sandbox` 是否还在 |
 | 抖音抓取失败 / 403 | 等几分钟再试，大概率是 IP 限流 |
 | 进度跑到 100% 后报 rename / `.part` 错误 | 目标目录不允许改名，确认走临时目录中转逻辑 |
-| 找不到 Playwright 浏览器 | `npx playwright install chromium` |
+| 找不到 Playwright 浏览器 | `npx playwright install chromium`，或用 `VIDEO_DL_BROWSER=/path/to/chrome` 指定 |
 | 报找不到 yt-dlp | `brew install yt-dlp` |
-| 环境重建失败 | 手动 `python3 -m venv <目录>` 再 `pip install websocket-client` |
+| 环境重建失败 | 手动 `python3 -m venv <VIDEO_DL_VENV>` 再 `<venv>/bin/pip install websocket-client` |
+| 想确认当前用的是哪套环境 | `python3 -c "import sys;sys.path.insert(0,'scripts');import _env;print(_env.venv_dir(),_env.venv_python(),_env.find_browser())"` |
 
 ## 开发笔记
 

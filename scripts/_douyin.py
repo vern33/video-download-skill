@@ -16,7 +16,6 @@
 """
 
 import argparse
-import glob
 import json
 import os
 import re
@@ -27,10 +26,14 @@ import tempfile
 import time
 import urllib.request
 
-VENV_DIR = os.path.expanduser("~/.workbuddy-ai/binaries/python/envs/douyin-dl")
-VENV_PY = os.path.join(VENV_DIR, "bin", "python")
-BOOTSTRAP_PY = (os.environ.get("VIDEO_DL_BOOTSTRAP_PY")
-                or shutil.which("python3") or sys.executable)
+HERE = os.path.dirname(os.path.abspath(__file__))
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+import _env  # noqa: E402  （同目录模块，跨平台环境探测）
+
+VENV_DIR = _env.venv_dir()
+VENV_PY = _env.venv_python()
+BOOTSTRAP_PY = _env.bootstrap_python()
 
 
 # ─────────────────────────── 环境自举 ───────────────────────────
@@ -49,13 +52,16 @@ def ensure_env():
 
     print("  ⚠️  下载环境缺失，正在自动重建…")
     try:
-        if not os.path.isfile(BOOTSTRAP_PY):
+        if os.sep in BOOTSTRAP_PY and not os.path.isfile(BOOTSTRAP_PY):
             print(f"  ❌ 找不到基础 Python: {BOOTSTRAP_PY}")
             sys.exit(1)
         subprocess.run([BOOTSTRAP_PY, "-m", "venv", VENV_DIR],
                        check=True, capture_output=True)
-        subprocess.run([os.path.join(VENV_DIR, "bin", "pip"), "install", "-q",
-                        "websocket-client"], check=True, capture_output=True)
+        pip = os.path.join(os.path.dirname(VENV_PY), "pip")
+        if os.name == "nt":
+            pip += ".exe"
+        subprocess.run([pip, "install", "-q", "websocket-client"],
+                       check=True, capture_output=True)
         print("  ✅ 环境已重建")
         os.execv(VENV_PY, [VENV_PY, me] + sys.argv[1:])
     except Exception as e:
@@ -110,13 +116,8 @@ def resolve_short_url(url, timeout=20):
 
 
 def find_browser():
-    base = os.path.expanduser("~/Library/Caches/ms-playwright")
-    for pat in (f"{base}/chromium_headless_shell-*/chrome-mac/headless_shell",
-                f"{base}/chromium-*/chrome-mac/Chromium.app/Contents/MacOS/Chromium"):
-        hits = sorted(glob.glob(pat))
-        if hits:
-            return hits[-1]
-    return None
+    """交给 _env 做跨平台探测：显式指定 → Playwright 缓存 → PATH"""
+    return _env.find_browser()
 
 
 class CDP:

@@ -23,10 +23,13 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-VENV_DIR = os.path.expanduser("~/.workbuddy-ai/binaries/python/envs/douyin-dl")
-VENV_PY = os.path.join(VENV_DIR, "bin", "python")
-BOOTSTRAP_PY = (os.environ.get("VIDEO_DL_BOOTSTRAP_PY")
-                or shutil.which("python3") or sys.executable)
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+import _env  # noqa: E402  （同目录模块，跨平台环境探测）
+
+VENV_DIR = _env.venv_dir()
+VENV_PY = _env.venv_python()
+BOOTSTRAP_PY = _env.bootstrap_python()
 
 G, R, Y, B, N = "\033[32m", "\033[31m", "\033[33m", "\033[36m", "\033[0m"
 def ok(m): print(f"{G}  ✅ {m}{N}")
@@ -47,13 +50,18 @@ def ensure_env():
         os.execv(VENV_PY, [VENV_PY, me] + sys.argv[1:])
     print("  ⚠️  下载环境缺失，正在自动重建…")
     try:
-        subprocess.run([BOOTSTRAP_PY, "-m", "venv", VENV_DIR], check=True, capture_output=True)
-        subprocess.run([os.path.join(VENV_DIR, "bin", "pip"), "install", "-q",
-                        "websocket-client"], check=True, capture_output=True)
+        subprocess.run([BOOTSTRAP_PY, "-m", "venv", VENV_DIR],
+                       check=True, capture_output=True)
+        pip = os.path.join(os.path.dirname(VENV_PY), "pip")
+        if os.name == "nt":
+            pip += ".exe"
+        subprocess.run([pip, "install", "-q", "websocket-client"],
+                       check=True, capture_output=True)
         print("  ✅ 环境已重建")
         os.execv(VENV_PY, [VENV_PY, me] + sys.argv[1:])
     except Exception as e:
         print(f"  ❌ 环境重建失败: {e}")
+        print(f"     请手动执行: {BOOTSTRAP_PY} -m venv {VENV_DIR}")
         sys.exit(1)
 
 
@@ -96,15 +104,13 @@ def extract_urls(texts):
 
 
 def has_ytdlp():
-    for p in os.environ.get("PATH", "").split(os.pathsep):
-        if os.path.isfile(os.path.join(p, "yt-dlp")):
-            return True
-    return bool(subprocess.run(["which", "yt-dlp"], capture_output=True).returncode == 0)
+    return shutil.which("yt-dlp") is not None
 
 
 # ─────────────────────── 通道实现 ───────────────────────
 
 def run_douyin(urls, out_dir, only_info):
+    ensure_env()          # 只有走抖音通道才需要 venv，避免通用链接用户被强建环境
     script = os.path.join(HERE, "_douyin.py")
     cmd = [sys.executable, script] + urls + ["--out", out_dir]
     if only_info:
@@ -248,5 +254,4 @@ def main():
 
 
 if __name__ == "__main__":
-    ensure_env()
     main()

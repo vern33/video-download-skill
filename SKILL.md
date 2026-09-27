@@ -15,6 +15,7 @@ python3 ~/.workbuddy-ai/skills/video-download/scripts/video_dl.py "<用户原话
 ```
 
 不需要手工清理噪音文字，脚本会自己提取链接。
+（`python3` 用系统 PATH 上的即可，无需写死绝对路径——脚本内部会自己找基础解释器和 venv。）
 
 ## 参数
 
@@ -39,10 +40,12 @@ python3 ~/.workbuddy-ai/skills/video-download/scripts/video_dl.py "<用户原话
 ```
 scripts/
 ├── video_dl.py     # 统一入口：提取链接 → 按平台分发
-└── _douyin.py      # 抖音通道实现（浏览器方案）
+├── _douyin.py      # 抖音通道实现（浏览器方案）
+└── _env.py         # 跨平台环境探测：venv 位置 / 基础解释器 / 浏览器
 ```
 
 `video_dl.py` 通过子进程调用 `_douyin.py` 和 `yt-dlp`。
+`_env.py` 被前两者共同导入，**所有路径都从这里取，脚本里不写死任何绝对路径**。
 
 ## 关键坑（改动前必读）
 
@@ -66,13 +69,42 @@ GPU process isn't usable. Goodbye.
 
 本机两条路都堵死：Chrome 走 Keychain（权限被拒），Safari 的 cookie 文件被沙箱拦截（`Operation not permitted`）。而且实测用户 Chrome 里根本没有抖音 cookie。
 
-### 4. 环境自举
+（沙箱相关部分仅适用于 WorkBuddy 环境；但即使不受沙箱限制，Chrome 里没有抖音 cookie 这一点也足以否决这条路。）
 
-抖音通道需要 `websocket-client`。脚本会检查，缺失时自动重建 venv 到
-`~/.workbuddy-ai/binaries/python/envs/douyin-dl` 并 `execv` 重入。
-所以直接用系统 `python3` 调也没问题。
+### 4. 环境自举（只在下抖音时才触发）
+
+抖音通道需要 `websocket-client`。`video_dl.py` 的 `run_douyin()` 会先调 `ensure_env()`：
+缺失时自动建 venv、装依赖，再 `os.execv` 重入自己。所以直接用系统 `python3` 调也没问题。
+
+**venv 位置不写死**，由 `_env.venv_dir()` 推导（见下节「环境变量」），默认：
+
+| 平台 | 默认 venv |
+|---|---|
+| macOS / Linux | `$XDG_CACHE_HOME/video-download/venv`（默认 `~/.cache/video-download/venv`） |
+| Windows | `%LOCALAPPDATA%\video-download\venv` |
+
+只下 YouTube / B站等通用站点时**不会**建 venv，避免无谓开销。
+
+### 4b. 环境变量（移植用）
+
+所有路径都可以用环境变量覆盖，方便迁移到别的机器或容器：
+
+| 变量 | 作用 |
+|---|---|
+| `VIDEO_DL_VENV` | 直接指定 venv 目录（优先级最高） |
+| `VIDEO_DL_HOME` | 数据目录，venv 建在其下的 `venv/` |
+| `VIDEO_DL_BOOTSTRAP_PY` | 建 venv 用的基础解释器，默认 `which python3` → `which python` → `sys.executable` |
+| `VIDEO_DL_BROWSER` | 直接指定浏览器可执行文件 |
+| `PLAYWRIGHT_BROWSERS_PATH` | Playwright 官方变量，同样被识别 |
+
+浏览器探测顺序：`VIDEO_DL_BROWSER` → Playwright 缓存（`~/Library/Caches/ms-playwright` /
+`~/.cache/ms-playwright` / `%LOCALAPPDATA%\ms-playwright`）→ PATH 上的
+`headless_shell` / `chromium` / `google-chrome`。优先用 `headless_shell`（纯二进制，启动最快）。
 
 ### 5. 非全放行目录必须走 `/tmp` 中转（通用通道）
+
+> **仅适用于 WorkBuddy 沙箱环境。** 普通终端里 `~/Downloads/` 改名不受限，
+> 中转逻辑会自动跳过（`_is_free_dir()` 判定），不会多一次拷贝。
 
 沙箱对 `~/Downloads/` 这类目录的策略是**「能新建、不能改名/删除」**。
 而 yt-dlp 收尾必须把 `.part` 改名成正式名、合并后再删原件，于是直接失败：
@@ -103,6 +135,9 @@ ffmpeg -y -i "video.fXXX.mp4.part" -i "audio.fYYY.webm.part" \
 先用 `ffprobe -show_entries format=duration` 核对两条流时长是否一致。
 
 ### 7. 钥匙串请求已改为「默认拒绝」——不再弹窗（2026-09-27 已解决）
+
+> **仅适用于 WorkBuddy 沙箱环境。** 下面改的是 `~/.workbuddy-ai/settings.json` 里的
+> 沙箱规则；在普通终端 / 其他 Agent 里跑不会有这个弹窗，本节可整段跳过。
 
 macOS 版 Chromium 启动时会去访问登录钥匙串里的 `Chrome Safe Storage` 项
 （它用这个密钥加密 profile 里的 cookie / 密码库）。
@@ -155,6 +190,12 @@ macOS 版 Chromium 启动时会去访问登录钥匙串里的 `Chrome Safe Stora
 | YouTube（短视频） | ✅ `Me at the zoo` 465K，av1+opus，19.02s（yt-dlp 自动合并音视频流） |
 | YouTube（长视频） | ✅ `罗马帝国千年全史 [NPDRrsu5hA4]` 292MB，av1 1920×1080 + opus，59:34 |
 | 腾讯视频 | ✅ 173MB，h264+aac，1280×720，21.5min（免费/试看内容；会员 DRM 正片拿不到） |
+| 跨平台改造回归 | ✅ 抖音 `f6e7f6a5…db7243d` / YouTube `Me at the zoo`，SHA256 与改造前逐位一致 |
+
+跨平台改造的验证方式：删掉旧 venv 后从零跑抖音通道，确认
+`_env` 能自行建出 `~/.cache/video-download/venv`、装好 `websocket-client 1.9.2`、
+`execv` 重入成功，且产物哈希不变；另外单独验证了 5 个环境变量覆盖 +
+Windows `Scripts/python.exe` 布局识别。
 
 ## 已知限制
 
@@ -173,6 +214,8 @@ macOS 版 Chromium 启动时会去访问登录钥匙串里的 `Chrome Safe Stora
 | 抖音抓取失败 / 403 | 等几分钟再试，大概率是 IP 限流 |
 | 进度 100% 后报 rename / `.part` 相关错误 | 目标目录不在全放行区，确认走 `/tmp` 中转逻辑（见坑 5） |
 | 弹「允许访问 login.keychain-db」 | **已改为默认拒绝，不再弹窗**；若又出现说明 settings.json 规则被重置（见坑 7） |
-| 找不到 Playwright 浏览器 | `npx playwright install chromium` |
+| 找不到 Playwright 浏览器 | `npx playwright install chromium`，或用 `VIDEO_DL_BROWSER=/path/to/chrome` 直接指定 |
 | 通用通道报找不到 yt-dlp | `brew install yt-dlp` |
-| 环境重建失败 | 手动 `python3 -m venv ~/.workbuddy-ai/binaries/python/envs/douyin-dl` 再 `pip install websocket-client` |
+| 环境重建失败 | 手动 `python3 -m venv <VIDEO_DL_VENV>` 再 `<venv>/bin/pip install websocket-client`（Windows 下是 `<venv>\Scripts\pip.exe`） |
+| 想换 venv 位置 / 换机器迁移 | 设 `VIDEO_DL_VENV` 或 `VIDEO_DL_HOME`，见「环境变量」 |
+| 想确认当前用的是哪套环境 | `python3 -c "import sys;sys.path.insert(0,'<scripts 目录>');import _env;print(_env.venv_dir(),_env.venv_python(),_env.find_browser())"` |
