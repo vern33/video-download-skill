@@ -10,7 +10,7 @@
     python3 video_dl.py "<链接或分享文本>" [...更多]
     python3 video_dl.py "<链接>" --info              # 只看信息不下载
     python3 video_dl.py "<链接>" --out ~/Downloads   # 指定输出目录
-    python3 video_dl.py "<链接>" --quality 1080      # 限制最高分辨率（默认 1080）
+    python3 video_dl.py "<链接>" --quality 1080      # 画面短边上限（横竖屏通用，默认 1080）
 
 输入可以直接是分享文本，脚本会自己把链接抠出来。
 """
@@ -82,7 +82,11 @@ GENERIC_RE = re.compile(
     r"v\.qq\.com/[^\s\u4e00-\u9fff]+|"
     r"(?:www\.)?xiaohongshu\.com/[^\s\u4e00-\u9fff]+|"
     r"xhslink\.com/[A-Za-z0-9]+|"
-    r"(?:www\.)?(?:twitter|x)\.com/[^\s\u4e00-\u9fff]+|"
+    # X / Twitter：www. / m. / mobile. 前缀，以及第三方镜像域名
+    # （fxtwitter / vxtwitter / fixupx / twittpr 会 302 到 x.com，yt-dlp 跟得上）
+    r"(?:www\.|m\.|mobile\.)?(?:twitter|x)\.com/[^\s\u4e00-\u9fff]+|"
+    r"(?:www\.)?(?:fxtwitter|vxtwitter|fixupx|twittpr)\.com/[^\s\u4e00-\u9fff]+|"
+    r"t\.co/[A-Za-z0-9]+|"
     r"(?:www\.)?vimeo\.com/\d+|"
     r"(?:www\.)?dailymotion\.com/video/[^\s\u4e00-\u9fff]+"
     r")")
@@ -188,9 +192,14 @@ def run_ytdlp(urls, out_dir, quality, only_info):
                      "  ✅ %(title)s | %(duration)s秒 | %(uploader)s"]
             rc = subprocess.call(base + [url])
         else:
-            fmt = (f"bv*[height<={quality}]+ba/b[height<={quality}]/b"
-                   if quality else "bv*+ba/b")
-            base += ["-f", fmt, "--merge-output-format", "mp4"]
+            base += ["-f", "bv*+ba/b", "--merge-output-format", "mp4"]
+            if quality:
+                # 上限用 res（= min(宽,高)）而不是 height。
+                # height 对竖屏视频是"长边"：720x1280 的 height=1280 > 1080，
+                # 会被 [height<=1080] 直接排除、退化到 480x852。
+                # res 与画面方向无关，横竖屏都能正确封顶。
+                # 必须是 `res:N`（冒号＝硬上限），不是 `res~N`（波浪号＝取最近）。
+                base += ["-S", f"res:{quality}"]
             rc = subprocess.call(base + [url])
             if rc == 0 and not free:
                 try:
@@ -212,7 +221,8 @@ def main():
     ap.add_argument("input", nargs="+", help="视频链接或分享文本")
     ap.add_argument("--info", action="store_true", help="只看信息不下载")
     ap.add_argument("--out", default=None, help="输出目录，默认 ~/Downloads/视频")
-    ap.add_argument("--quality", type=int, default=1080, help="最高分辨率，默认 1080")
+    ap.add_argument("--quality", type=int, default=1080,
+                    help="画面短边上限，横竖屏通用（默认 1080；设 0 表示不限制）")
     args = ap.parse_args()
 
     douyin, generic = extract_urls(args.input)

@@ -48,7 +48,7 @@ python3 scripts/video_dl.py "<链接或分享文本>"
 | `<输入>` | 链接或分享文本，可传多个、可混合平台 |
 | `--info` | 只看信息不下载（标题 / 作者 / 时长） |
 | `--out <目录>` | 输出目录，默认 `~/Downloads/视频/` |
-| `--quality <n>` | 通用通道最高分辨率，默认 1080 |
+| `--quality <n>` | **画面短边**上限，横竖屏通用，默认 1080；设 `0` 表示不限制 |
 
 示例：
 
@@ -109,6 +109,26 @@ venv 只在**下抖音时**才会按需创建；只下 YouTube / B站等站点�
 `iteminfo` 返回空 body、oEmbed 404、移动端 API 返回空，
 **浏览器方案是唯一可行路径。**
 
+### X / Twitter
+
+**公开推文免登录、免 cookie 就能下。** 下列链接写法都支持：
+
+| 形态 | 示例 |
+|---|---|
+| 新主域名 | `x.com/用户名/status/数字ID` |
+| 旧域名 | `twitter.com/用户名/status/数字ID` |
+| 带前缀 | `www.` / `m.` / `mobile.twitter.com` |
+| 通用跳转 | `twitter.com/i/status/数字ID` |
+| 旧式路径 | `twitter.com/用户名/statuses/数字ID` |
+| 带分享参数 | `...?s=20&t=xxxx` |
+| 第三方镜像 | `fxtwitter.com` / `vxtwitter.com` / `fixupx.com` / `twittpr.com` |
+| 短链 | `t.co/xxxxx` |
+
+镜像域名会 302 到 `x.com`，yt-dlp 自己跟得上，脚本不需要做域名改写。
+一条推文含多个视频时会全部下下来。
+
+仅粉丝可见、敏感/年龄限制的推文拿不到——这是 X 的服务端边界，不是脚本问题。
+
 ### 通用通道为什么要中转
 
 部分受限环境下，目标目录「能新建文件但不能改名/删除」，而 yt-dlp 收尾必须把
@@ -121,6 +141,8 @@ venv 只在**下抖音时**才会按需创建；只下 YouTube / B站等站点�
 - **抖音直链带签名会过期**，每次都要重新解析。
 - **会员 / 付费内容** —— 各平台的 DRM 正片都拿不到，只能下免费或试看部分。
 - **需要登录的内容**（如 YouTube 年龄限制视频）可能需要 cookies，当前未配置。
+- **X / Twitter 私密内容**（仅粉丝可见、敏感推文）拿不到，只有公开推文可下。
+- **X / Twitter 已删除内容**会报 `No video could be found in this tweet` / `Broadcast no longer exists`，属正常情况。
 
 ## 故障排查
 
@@ -129,6 +151,10 @@ venv 只在**下抖音时**才会按需创建；只下 YouTube / B站等站点�
 | 抖音「浏览器 CDP 端口没起来」 | 检查 `--no-sandbox` 是否还在 |
 | 抖音抓取失败 / 403 | 等几分钟再试，大概率是 IP 限流 |
 | 进度跑到 100% 后报 rename / `.part` 错误 | 目标目录不允许改名，确认走临时目录中转逻辑 |
+| 推文报 `No video could be found in this tweet` | 该推文确实没有视频，或被删除/设为私密；不是脚本问题 |
+| 推文报 `Broadcast no longer exists` | 直播回放已被删除，正常现象 |
+| 推文下载很慢 / 中途超时 | 一条推文可能含多个长视频，会全部下完；放后台跑或加长超时 |
+| 竖屏视频画质明显偏低 | 清晰度上限必须用 `res` 而非 `height`，见 SKILL.md 坑 8 |
 | 找不到 Playwright 浏览器 | `npx playwright install chromium`，或用 `VIDEO_DL_BROWSER=/path/to/chrome` 指定 |
 | 报找不到 yt-dlp | `brew install yt-dlp` |
 | 环境重建失败 | 手动 `python3 -m venv <VIDEO_DL_VENV>` 再 `<venv>/bin/pip install websocket-client` |
@@ -141,6 +167,7 @@ venv 只在**下抖音时**才会按需创建；只下 YouTube / B站等站点�
 - `--no-sandbox` 为什么不能删
 - 为什么不能用 `--cookies-from-browser`
 - `.part` 改名失败的成因与中转方案
+- 清晰度上限为什么必须用 `res` 而不是 `height`（否则竖屏视频静默降级）
 - macOS 钥匙串弹窗的成因与处理
 
 ## 免责声明

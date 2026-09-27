@@ -24,7 +24,7 @@ python3 ~/.workbuddy-ai/skills/video-download/scripts/video_dl.py "<用户原话
 | `<输入>` | 链接或分享文本，可传多个、可混合平台 |
 | `--info` | 只看信息不下载（标题/作者/时长） |
 | `--out <目录>` | 指定输出目录，默认 `~/Downloads/视频/` |
-| `--quality <n>` | 通用通道最高分辨率，默认 1080 |
+| `--quality <n>` | **画面短边**上限，横竖屏通用，默认 1080；设 `0` 不限制（见坑 8） |
 
 ## 平台分发规则
 
@@ -34,6 +34,25 @@ python3 ~/.workbuddy-ai/skills/video-download/scripts/video_dl.py "<用户原话
 | 其他全部 | yt-dlp | 系统已装 `yt-dlp` + `ffmpeg` |
 
 抖音之所以特殊：它的 Argus 风控要求 `UIFID_TEMP` / `s_v_web_id` cookie 且**服务端校验真实性**，Python 直连还会因 TLS 指纹不同吃 403，所以必须在真实浏览器上下文里发请求。其他站点 yt-dlp 直接就能处理。
+
+### X / Twitter 的链接形态
+
+`GENERIC_RE` 里已覆盖下列写法，都实测可下：
+
+| 形态 | 示例 |
+|---|---|
+| 新主域名 | `x.com/用户名/status/数字ID` |
+| 旧域名 | `twitter.com/用户名/status/数字ID` |
+| 带前缀 | `www.` / `m.` / `mobile.twitter.com` |
+| 通用跳转 | `twitter.com/i/status/数字ID` |
+| 旧式路径 | `twitter.com/用户名/statuses/数字ID` |
+| 带分享参数 | `...?s=20&t=xxxx` |
+| 第三方镜像 | `fxtwitter.com` / `vxtwitter.com` / `fixupx.com` / `twittpr.com` |
+| 短链 | `t.co/xxxxx` |
+
+**镜像域名会 302 到 `x.com`，yt-dlp 自己跟得上，不需要在脚本里做域名改写**（实测三个镜像域名都能解析出正确 uploader）。
+
+**公开推文不需要登录、不需要 cookie** —— 已用 yt-dlp 官方测试用例里的真实推文验证。一条推文含多个视频时会全部下下来（`/video/1`、`/video/2` 分别对应）。
 
 ## 脚本结构
 
@@ -182,6 +201,45 @@ macOS 版 Chromium 启动时会去访问登录钥匙串里的 `Chrome Safe Stora
 
 脚本里仍保留 `--use-mock-keychain`（无害），注释里写明它挡不住。
 
+### 8. 清晰度上限要用 `res` 而不是 `height`（否则竖屏视频被降级）
+
+**这是 2026-09-27 实测发现并修掉的 bug。**
+
+原先通用通道用的是 `-f "bv*[height<=1080]+ba/b[height<=1080]"`。
+对**竖屏**视频，`height` 是**长边**——一条 720×1280 的竖屏视频 `height=1280 > 1080`，
+会被这个条件**直接排除**，然后退化到 `height<=1080` 里最高的一档（480×852）。
+画面质量掉一大截，但**不报任何错**，只看输出目录很难发现。
+
+推文、YouTube Shorts、B站竖屏、小红书这类竖屏内容全都会中招。
+
+**修法**：改用 yt-dlp 的格式排序字段 `res`（定义见 `utils/_utils.py`：
+`'res': {'type': 'multiple', 'field': ('height', 'width'), 'function': min}`，
+即 **`min(宽,高)`，与画面方向无关**）：
+
+```bash
+-S "res:1080"      # ✅ 冒号 = 硬上限
+```
+
+**必须是冒号，不能是波浪号。** 两者语义完全不同（源码 `_utils.py:5572`）：
+
+| 写法 | 语义 | 结果 |
+|---|---|---|
+| `res:1080` | 硬上限。`res > 1080` 的格式排序键为负，**排到所有 ≤1080 的后面** | ✅ 要的 |
+| `res~1080` | 取最近。按 `-abs(res-1080)` 排序 | ❌ 只有 4K 和 480 时会选 480 |
+
+另外 `res` **只能用于 `-S`，不能用于 `-f` 过滤**：写 `-f "bv*[res<=1080]"` 会报
+`Requested format is not available`（`res` 是排序字段，不是过滤器字段）。
+
+**实测对照**（同一条竖屏推文）：
+
+| 方案 | 选中格式 | 分辨率 |
+|---|---|---|
+| `-f "...[height<=1080]..."` | `hls-582` | 480×852 ❌ |
+| `-S "res:1080"` | `hls-1150` | **720×1280** ✅ |
+
+**横屏无回归**：4K 视频（有 2160/1440/1080/720 阶梯）两种写法都选 1920×1080；
+`-S "res:720"` 选 1280×720；不设上限（`--quality 0`）选 3840×2160。
+
 ## 实测记录
 
 | 平台 | 结果 |
@@ -190,6 +248,8 @@ macOS 版 Chromium 启动时会去访问登录钥匙串里的 `Chrome Safe Stora
 | YouTube（短视频） | ✅ `Me at the zoo` 465K，av1+opus，19.02s（yt-dlp 自动合并音视频流） |
 | YouTube（长视频） | ✅ `罗马帝国千年全史 [NPDRrsu5hA4]` 292MB，av1 1920×1080 + opus，59:34 |
 | 腾讯视频 | ✅ 173MB，h264+aac，1280×720，21.5min（免费/试看内容；会员 DRM 正片拿不到） |
+| X / Twitter | ✅ `x.com/historyinmemes/status/1790637656616943991` 1.4MB，h264+aac，728×720，15.56s，**免登录免 cookie** |
+| X / Twitter（多视频推文） | ✅ `twitter.com/CTVJLaidlaw/status/1600649710662213632` 同一条推文里的多个视频全部下到，720×1280，113s / 102s |
 | 跨平台改造回归 | ✅ 抖音 `f6e7f6a5…db7243d` / YouTube `Me at the zoo`，SHA256 与改造前逐位一致 |
 
 跨平台改造的验证方式：删掉旧 venv 后从零跑抖音通道，确认
@@ -205,6 +265,8 @@ Windows `Scripts/python.exe` 布局识别。
 - **CDN 直链有时效**：抖音直链带签名会过期，每次重新跑。
 - **会员/付费内容**：各平台的 DRM 正片都拿不到，只能下免费或试看部分。
 - **需要登录的内容**：YouTube 年龄限制视频等可能需要 cookies，当前未配置。
+- **X / Twitter 私密内容**：仅粉丝可见、敏感/年龄限制的推文拿不到，只有公开推文可下（这是 X 的服务端边界，不是脚本问题）。
+- **X / Twitter 已删除内容**：推文或直播被删会报 `No video could be found in this tweet` / `Broadcast no longer exists`，属正常情况，不是 bug。
 
 ## 故障排查
 
@@ -212,6 +274,9 @@ Windows `Scripts/python.exe` 布局识别。
 |---|---|
 | 抖音「浏览器 CDP 端口没起来」 | 检查 `--no-sandbox` 是否还在 |
 | 抖音抓取失败 / 403 | 等几分钟再试，大概率是 IP 限流 |
+| 推文报 `No video could be found in this tweet` | 该推文确实没有视频，或被删除/设为私密；不是脚本问题 |
+| 推文报 `Broadcast no longer exists` | 直播回放已被删除，正常现象 |
+| 推文下载很慢 / 中途超时 | 一条推文可能含多个长视频，yt-dlp 会全部下完；放后台跑或加长超时 |
 | 进度 100% 后报 rename / `.part` 相关错误 | 目标目录不在全放行区，确认走 `/tmp` 中转逻辑（见坑 5） |
 | 弹「允许访问 login.keychain-db」 | **已改为默认拒绝，不再弹窗**；若又出现说明 settings.json 规则被重置（见坑 7） |
 | 找不到 Playwright 浏览器 | `npx playwright install chromium`，或用 `VIDEO_DL_BROWSER=/path/to/chrome` 直接指定 |
