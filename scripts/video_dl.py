@@ -16,6 +16,7 @@
 """
 
 import argparse
+import datetime
 import os
 import re
 import shutil
@@ -108,7 +109,43 @@ def extract_urls(texts):
 
 
 def has_ytdlp():
-    return shutil.which("yt-dlp") is not None
+    return _env.ytdlp_bin() is not None
+
+
+# yt-dlp 版本比这个天数还老就告警。它大约每月一发版，
+# 超过 4 个月基本等于「站点接口早就改过好几轮了」。
+_YTDLP_STALE_DAYS = 120
+
+
+def ytdlp_warn_if_stale():
+    """yt-dlp 是按各站点私有接口写死的，版本一旧就会解析失败。
+
+    B站 `HTTP Error 412: Precondition Failed` 就是典型：换 cookie、换 IP、
+    加 UA 全都没用，只有升级 yt-dlp 能解。提前告警比事后猜「站点封了我们」便宜太多。
+    """
+    exe = _env.ytdlp_bin()
+    if not exe:
+        return
+    try:
+        out = subprocess.run([exe, "--version"], capture_output=True,
+                             text=True, timeout=15)
+        ver = (out.stdout or "").strip().splitlines()[0]
+    except Exception:
+        return
+    m = re.match(r"(\d{4})\.(\d{2})\.(\d{2})", ver)
+    if not m:
+        return
+    try:
+        released = datetime.date(*(int(x) for x in m.groups()))
+    except ValueError:
+        return
+    age = (datetime.date.today() - released).days
+    if age > _YTDLP_STALE_DAYS:
+        warn(f"yt-dlp {ver} 已 {age} 天未更新，站点接口变更会直接导致解析失败"
+             f"（B站 412 就是这么来的）")
+        info("升级：brew upgrade yt-dlp  或  pip install -U yt-dlp")
+        info("或者用 VIDEO_DL_YTDLP=/path/to/newer/yt-dlp 指向自带的新版")
+        print()
 
 
 # ─────────────────────── 通道实现 ───────────────────────
@@ -163,6 +200,7 @@ def run_ytdlp(urls, out_dir, quality, only_info):
     print("=" * 62)
     print()
     os.makedirs(out_dir, exist_ok=True)
+    ytdlp_warn_if_stale()
 
     # 沙箱里 ~/Downloads 这类目录"能新建、不能改名/删除"，
     # 而 yt-dlp 收尾必须把 .part 改名成正式名 —— 会被直接拒掉。
@@ -183,7 +221,7 @@ def run_ytdlp(urls, out_dir, quality, only_info):
                 except OSError:
                     pass
 
-        base = ["yt-dlp", "--no-warnings", "--newline",
+        base = [_env.ytdlp_bin(), "--no-warnings", "--newline",
                 "--no-playlist", "--no-mtime",
                 "-o", os.path.join(staging, "%(title).80s [%(id)s].%(ext)s")]
 
@@ -217,6 +255,14 @@ def run_ytdlp(urls, out_dir, quality, only_info):
 
 
 def main():
+    # 父进程的 print 在管道下是块缓冲，而 yt-dlp 子进程直接写 fd。
+    # 不改成行缓冲的话，子进程的报错会跑到横幅前面去，看着像「一开始就炸了」，
+    # 实际是输出顺序被打乱，排查时会严重误导。
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except Exception:
+        pass
+
     ap = argparse.ArgumentParser(description="统一视频下载入口")
     ap.add_argument("input", nargs="+", help="视频链接或分享文本")
     ap.add_argument("--info", action="store_true", help="只看信息不下载")

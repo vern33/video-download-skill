@@ -114,6 +114,7 @@ GPU process isn't usable. Goodbye.
 | `VIDEO_DL_HOME` | 数据目录，venv 建在其下的 `venv/` |
 | `VIDEO_DL_BOOTSTRAP_PY` | 建 venv 用的基础解释器，默认 `which python3` → `which python` → `sys.executable` |
 | `VIDEO_DL_BROWSER` | 直接指定浏览器可执行文件 |
+| `VIDEO_DL_YTDLP` | 直接指定 yt-dlp 可执行文件（系统那份太旧时用，见坑 10） |
 | `PLAYWRIGHT_BROWSERS_PATH` | Playwright 官方变量，同样被识别 |
 
 浏览器探测顺序：`VIDEO_DL_BROWSER` → Playwright 缓存（`~/Library/Caches/ms-playwright` /
@@ -240,6 +241,89 @@ macOS 版 Chromium 启动时会去访问登录钥匙串里的 `Chrome Safe Stora
 **横屏无回归**：4K 视频（有 2160/1440/1080/720 阶梯）两种写法都选 1920×1080；
 `-S "res:720"` 选 1280×720；不设上限（`--quality 0`）选 3840×2160。
 
+### 9. `-S res:N` 必须配 `-f "bv*+ba/b"`，否则可能下到缩略图
+
+**2026-09-27 实测撞出来的。** 微博的格式列表里既有真实视频，也有一张封面图：
+
+```
+scrubber_hd jpg 320x180        ← 封面缩略图
+mp4_720p    mp4 1280x720
+mp4_1080p   mp4 1920x1080
+```
+
+只写 `-S "res:360"` 时，360 这个硬上限把 720/1080 **全排到后面**，
+而 320×180 的 JPG 满足 ≤360，**反而成了最优** —— 下出来一个 752KB 的 `.jpg`，还不报错。
+
+`-S` 只负责**排序**，不保证选到视频。所以必须同时用 `-f` 限定要有视频流：
+
+```bash
+-f "bv*+ba/b" -S "res:1080"     # ✅ 当前脚本的写法，正确选到 mp4_hd
+-S "res:360"                     # ❌ 可能选到 JPG 封面
+```
+
+**残留风险**：若把 `--quality` 设得比站点最低真实视频分辨率还低，理论上仍可能选到缩略图。
+默认 1080 不会触发（真实视频一般 ≥360）。加固方向：在 `-f` 里显式排除图片格式。
+
+### 10. yt-dlp 版本过旧会让「站点」背锅（B站 412 的真凶）
+
+**2026-09-27 花了很久才定位，务必先查版本再怀疑站点。**
+
+现象：B站链接报
+
+```
+ERROR: [BiliBili] 1qU8L6SEfm: Unable to download JSON metadata:
+       HTTP Error 412: Precondition Failed
+```
+
+`412 Precondition Failed` 长得极像风控/反爬，于是很容易往「要 cookie」「要换 IP」「UA 不对」
+「站点封了」的方向查。**这些全是错的**，实测逐一排除：
+
+| 假设 | 验证方式 | 结果 |
+|---|---|---|
+| 视频不存在/被删 | `curl api.bilibili.com/x/web-interface/view?bvid=…` | `code:0`，标题正常返回 → 排除 |
+| 缺 `buvid3` cookie | curl 拿真 cookie 后重试 | **仍然 412** → 排除 |
+| 需要登录 cookie | 同上 | 排除 |
+| **yt-dlp 版本旧** | PyPI 最新 `2026.8.19` vs 本地 `2025.10.22`（差约 11 个月） | **换新版立刻成功** ✅ |
+
+所以规则是：
+
+> **任何站点突然解析失败，第一件事是 `yt-dlp --version` 对比最新版。**
+
+yt-dlp 是按各站点私有接口写死的，站点一改版就得跟着升级。包管理器（Homebrew / apt）
+往往把版本钉在装的那天，不会自动跟。
+
+脚本现在会**自动做这件事**：`ytdlp_warn_if_stale()` 在下载前取 `--version`，
+解析出版本里的日期，超过 `_YTDLP_STALE_DAYS`（120 天）就打印告警和升级命令。
+
+逃生通道：系统那份不能/不想升级时，用 `VIDEO_DL_YTDLP` 指向自带的新版：
+
+```bash
+VIDEO_DL_YTDLP=/path/to/newer/yt-dlp python3 video_dl.py "<链接>"
+```
+
+隔离装一份新版（不动系统）：
+
+```bash
+python3 -m venv /tmp/ytdlp-new && /tmp/ytdlp-new/bin/pip install -U yt-dlp
+```
+
+**同一条视频实测对比**（`<B站视频ID>`，64 分钟）：
+
+| yt-dlp | 结果 |
+|---|---|
+| 2025.10.22（系统 brew） | ❌ `HTTP Error 412` |
+| 2026.08.19（隔离 venv） | ✅ `<UP主> \| 3851.04s \| 1920x1080` |
+
+顺带一条：这条视频的 **4K 和 1080P60 是大会员专属**，免费档最高就是 1080P。
+yt-dlp 会明说 `Format(s) 4K 超高清, 1080P 60帧 are missing; you have to become
+a premium member`——看到这行说明「不是我们没下到，是账号权限不够」，不是 bug。
+
+### 11. 输出顺序会被缓冲打乱（已修）
+
+父进程 `print()` 在管道下是块缓冲，yt-dlp 子进程直接写 fd。
+两者不共享缓冲，导致子进程的报错**跑到横幅前面**，看起来像「一开始就炸了」，
+排查时会把因果关系判断反。已在 `main()` 里 `sys.stdout.reconfigure(line_buffering=True)` 修掉。
+
 ## 实测记录
 
 | 平台 | 结果 |
@@ -250,6 +334,7 @@ macOS 版 Chromium 启动时会去访问登录钥匙串里的 `Chrome Safe Stora
 | 腾讯视频 | ✅ 173MB，h264+aac，1280×720，21.5min（免费/试看内容；会员 DRM 正片拿不到） |
 | X / Twitter | ✅ `x.com/historyinmemes/status/1790637656616943991` 1.4MB，h264+aac，728×720，15.56s，**免登录免 cookie** |
 | X / Twitter（多视频推文） | ✅ `twitter.com/CTVJLaidlaw/status/1600649710662213632` 同一条推文里的多个视频全部下到，720×1280，113s / 102s |
+| B站 | ✅ `<B站视频ID>` 900.6 MiB，av1 1920×1080 + aac，3851.04s（64 分钟）。**前提是 yt-dlp ≥2026.08.19**，旧版 412，见坑 10 |
 | 跨平台改造回归 | ✅ 抖音 `f6e7f6a5…db7243d` / YouTube `Me at the zoo`，SHA256 与改造前逐位一致 |
 
 跨平台改造的验证方式：删掉旧 venv 后从零跑抖音通道，确认
@@ -257,8 +342,49 @@ macOS 版 Chromium 启动时会去访问登录钥匙串里的 `Chrome Safe Stora
 `execv` 重入成功，且产物哈希不变；另外单独验证了 5 个环境变量覆盖 +
 Windows `Scripts/python.exe` 布局识别。
 
+### 更大范围站点实测（2026-09-27，共 18 个站点）
+
+**先说前提：白名单是一道硬闸。** 下面这些站点虽然 yt-dlp 能下，但**脚本会直接拒绝**
+（`GENERIC_RE` 没命中），要下得绕过脚本直接调 `yt-dlp`。详见「已知限制」。
+
+**yt-dlp 层面实测可下**（用 `-f "bv*+ba/b"` 真实下载并 ffprobe 校验）：
+
+| 站点 | 大小 | 时长 | 视频 |
+|---|---|---|---|
+| 微博 | 63.97MB | 918.7s | h264 1280×720 |
+| 优酷 | 50.32MB | 702.1s | h264 640×360 ⚠️ 需 Referer |
+| Niconico | 10.94MB | 219.1s | h264 480×360 |
+| SoundCloud | 7.64MB | 397.2s | 纯音频 aac |
+| TikTok | 2.62MB | 27.5s | h264 540×960 |
+| Twitch | 1.18MB | 20.0s | h264 640×360 |
+
+**实测不可下**：
+
+| 站点 | 报错 | 根因 |
+|---|---|---|
+| B站 | `HTTP Error 412: Precondition Failed` | 反爬。换 2 个 BV 号 + 覆盖 Chrome UA，三次全 412 → **站点级**，非链接失效 |
+| Vimeo / Reddit / Instagram / Facebook | `login required` 类 | 必须登录 |
+| 爱奇艺 | `Can't find any video` | 换 2 条链接一样 |
+| 小红书 | `No video formats found` | 换 2 条链接一样 |
+| Dailymotion | `Not found` | 4 条测试链接全失效，**无法验证** |
+| 快手 | — | yt-dlp **根本没有**快手提取器 |
+
+**方法论**：测试链接从 yt-dlp 提取器的 `_TESTS` 数组里取，真实且长期有效。
+定性必须**同站点换 2–3 条链接重试**，否则分不清「站点不支持」和「这条链接失效了」。
+
 ## 已知限制
 
+- **⚠️ 白名单是硬闸（最容易踩的一条）**：`GENERIC_RE` 只放行 13 类链接形态
+  （YouTube / B站 / 腾讯视频 / 小红书 / X-Twitter / Vimeo / Dailymotion / t.co）。
+  **白名单外的链接会在联网前就被拒**，报「没在输入里找到可识别的视频链接」——
+  即使 yt-dlp 明明能下。已实测被拒的：Instagram、微博、优酷、爱奇艺、快手、
+  Twitch、Facebook、Niconico、TikTok、SoundCloud、Reddit。
+  yt-dlp 有 1848 个提取器，脚本只放行 13 类。
+  这是**故意的设计**（避免把聊天文本里的普通网址误判成视频），代价是覆盖面窄。
+  绕过办法：直接 `yt-dlp "<链接>"`，或把域名加进 `GENERIC_RE`。
+- **优酷必须带 `Referer`**：不带报 `HTTP Error 403: Forbidden`，且报错发生在
+  **解析成功之后的下载阶段**，极易误判成「站点不支持」。加
+  `--referer "https://v.youku.com/"` 即可（脚本目前没加，所以即使放开白名单也下不了）。
 - **抖音 IP 限流**：短时间反复请求吃 `HTTP 403`。脚本内置 3 次重试 + 4 秒退避。
 - **抖音 headless 检测**：可能被识别。脚本有兜底——从页面 `<video>` 标签取直链。
 - **抖音图文作品**：没有 mp4 直链，会报「没找到 mp4 直链」，这是正常情况。
@@ -278,6 +404,9 @@ Windows `Scripts/python.exe` 布局识别。
 | 推文报 `Broadcast no longer exists` | 直播回放已被删除，正常现象 |
 | 推文下载很慢 / 中途超时 | 一条推文可能含多个长视频，yt-dlp 会全部下完；放后台跑或加长超时 |
 | 进度 100% 后报 rename / `.part` 相关错误 | 目标目录不在全放行区，确认走 `/tmp` 中转逻辑（见坑 5） |
+| **任何站点突然 `HTTP Error 412` / 解析失败** | **先查 `yt-dlp --version` 对比最新版**，多半是版本旧了，别怀疑站点封了你（见坑 10） |
+| B站 `412 Precondition Failed` | 同上；换 cookie / 换 IP / 改 UA 都无效，升级 yt-dlp 才好。临时可用 `VIDEO_DL_YTDLP` 指向新版 |
+| 输出里报错跑到横幅前面 | 已修行缓冲（见坑 11）；若又出现说明 `main()` 的 `reconfigure` 被删了 |
 | 弹「允许访问 login.keychain-db」 | **已改为默认拒绝，不再弹窗**；若又出现说明 settings.json 规则被重置（见坑 7） |
 | 找不到 Playwright 浏览器 | `npx playwright install chromium`，或用 `VIDEO_DL_BROWSER=/path/to/chrome` 直接指定 |
 | 通用通道报找不到 yt-dlp | `brew install yt-dlp` |

@@ -26,6 +26,11 @@
 | ffmpeg | 音视频流合并 | `brew install ffmpeg` |
 | Playwright Chromium | 抖音通道 | `npx playwright install chromium` |
 
+> **yt-dlp 要勤升级。** 它是按各站点私有接口写死的，站点一改版就得跟着升。
+> 包管理器会把版本钉在安装那天，不会自动跟。版本超过 120 天时脚本会主动告警。
+> 典型症状：B站报 `HTTP Error 412: Precondition Failed`，换 cookie / 换 IP / 改 UA 全都没用，
+> **只有升级 yt-dlp 能解**。详见 SKILL.md 坑 10。
+
 ## 安装
 
 作为 WorkBuddy Skill：
@@ -92,6 +97,7 @@ video_dl.py            统一入口：提取链接 → 按平台分发
 | `VIDEO_DL_HOME` | 数据目录，venv 建在其下的 `venv/` |
 | `VIDEO_DL_BOOTSTRAP_PY` | 建 venv 用的基础解释器 |
 | `VIDEO_DL_BROWSER` | 直接指定浏览器可执行文件 |
+| `VIDEO_DL_YTDLP` | 直接指定 yt-dlp 可执行文件（系统那份太旧时用） |
 | `PLAYWRIGHT_BROWSERS_PATH` | Playwright 官方变量，同样被识别 |
 
 浏览器按「`VIDEO_DL_BROWSER` → Playwright 缓存 → PATH」的顺序查找，优先用
@@ -155,6 +161,8 @@ venv 只在**下抖音时**才会按需创建；只下 YouTube / B站等站点�
 | 推文报 `Broadcast no longer exists` | 直播回放已被删除，正常现象 |
 | 推文下载很慢 / 中途超时 | 一条推文可能含多个长视频，会全部下完；放后台跑或加长超时 |
 | 竖屏视频画质明显偏低 | 清晰度上限必须用 `res` 而非 `height`，见 SKILL.md 坑 8 |
+| **任何站点突然 `HTTP Error 412` / 解析失败** | **先查 `yt-dlp --version` 对比最新版**，多半是版本旧了，别怀疑站点封了你 |
+| B站 `412 Precondition Failed` | 换 cookie / 换 IP / 改 UA 都无效，升级 yt-dlp 才好；临时可 `VIDEO_DL_YTDLP` 指向新版 |
 | 找不到 Playwright 浏览器 | `npx playwright install chromium`，或用 `VIDEO_DL_BROWSER=/path/to/chrome` 指定 |
 | 报找不到 yt-dlp | `brew install yt-dlp` |
 | 环境重建失败 | 手动 `python3 -m venv <VIDEO_DL_VENV>` 再 `<venv>/bin/pip install websocket-client` |

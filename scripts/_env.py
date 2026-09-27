@@ -9,6 +9,7 @@
     VIDEO_DL_VENV          venv 目录，优先级最高
     VIDEO_DL_BOOTSTRAP_PY  用来创建 venv 的基础 Python
     VIDEO_DL_BROWSER       直接指定浏览器可执行文件
+    VIDEO_DL_YTDLP         直接指定 yt-dlp 可执行文件（系统那份太旧时用）
     PLAYWRIGHT_BROWSERS_PATH  Playwright 官方变量，同样被识别
 """
 
@@ -54,6 +55,19 @@ def bootstrap_python():
     if explicit:
         return os.path.expanduser(explicit)
     return shutil.which("python3") or shutil.which("python") or sys.executable
+
+
+def ytdlp_bin():
+    """yt-dlp 可执行文件；找不到返回 None。
+
+    yt-dlp 是按各站点私有接口写死的，站点一改版就必须跟着升级
+    （B站 HTTP 412 就是版本过旧导致的）。系统那份往往被包管理器
+    钉在旧版本上，所以留一个 VIDEO_DL_YTDLP 指向自带的新版。
+    """
+    explicit = os.environ.get("VIDEO_DL_YTDLP")
+    if explicit:
+        return os.path.expanduser(explicit)
+    return shutil.which("yt-dlp")
 
 
 def playwright_bases():
