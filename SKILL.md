@@ -32,6 +32,7 @@ python3 ~/.workbuddy-ai/skills/video-download/scripts/video_dl.py "<用户原话
 |---|---|---|
 | 抖音 | 浏览器方案 | Playwright Chromium + `--no-sandbox`，页面内 fetch |
 | **直链媒体文件** | yt-dlp | 路径以 `.mp4/.m3u8/.mov/.ts/.mp3` 等结尾，**不限域名**，查询串原样保留 |
+| **虎扑** | yt-dlp | 帖子页 `.html` 交给 yt-dlp 通用提取器，它自己抓页面里带签名的 CDN 直链 |
 | 其他全部 | yt-dlp | 系统已装 `yt-dlp` + `ffmpeg` |
 
 抖音之所以特殊：它的 Argus 风控要求 `UIFID_TEMP` / `s_v_web_id` cookie 且**服务端校验真实性**，Python 直连还会因 TLS 指纹不同吃 403，所以必须在真实浏览器上下文里发请求。其他站点 yt-dlp 直接就能处理。
@@ -54,6 +55,26 @@ python3 ~/.workbuddy-ai/skills/video-download/scripts/video_dl.py "<用户原话
 **命名**：直链的 `title` 和 `id` 是同一个东西（都是文件名），
 套通用模板会得到 `xxx [xxx].mp4` 这种自我重复的名字，
 所以这类链接走不带 `[%(id)s]` 的模板（见坑 15）。
+
+### 虎扑（2026-09-27 加入白名单）
+
+用户反复发虎扑链接，所以加进了 `GENERIC_RE`：`(?:bbs|www|m|nba|voice)\.hupu\.com/` 和裸域 `hupu\.com/`。
+
+两种链接形态都支持：
+
+| 形态 | 例子 | 走哪条路 |
+|---|---|---|
+| **帖子页** | `bbs.hupu.com/<帖子ID>.html` | 白名单 → yt-dlp 通用提取器，**自己从页面里抓带签名的 CDN 直链** |
+| **CDN 直链** | `v.hoopchina.com.cn/<32位hex>_w_0_h_0__wz_transcode.mp4?auth_key=...` | `MEDIA_URL_RE`（域名 `hoopchina.com.cn` 不在白名单，靠直链规则放行） |
+
+⚠️ **CDN 直链的签名是必需的**：实测去掉 `?auth_key=...` 后返回 **403**。
+所以拿链接时要连查询串一起复制。
+
+**另一个坑**：白名单按**域名**放行、不限制路径，所以虎扑帖子页里满地的
+`bbs.hupu.com/img/logo.png`、`/js/smDeviceSdk2.js` 也会被域名规则命中。
+已加 `_ASSET_RE` 在提取阶段剔掉静态资源后缀
+（`jpg/png/gif/webp/svg/ico/css/js/json/woff/ttf/pdf/zip` 等）。
+**注意 `.html` 绝对不能列进去**——虎扑/微博这类帖子页正是 `.html`，那恰恰是我们要的。
 
 ### X / Twitter 的链接形态
 
@@ -519,6 +540,8 @@ else:
 | 腾讯视频（专辑页） | ❌ `/x/cover/<cid>.html` 走 `vqq:series`，提取器已失效，**退出码 0 但输出为空**（见坑 14） |
 | 腾讯视频（专辑内分集） | ⚠️ 取决于该集本身：实测某集返回 `Tencent said: 这个视频被外星人劫走，暂时看不了了~` |
 | 直链媒体（虎扑 CDN） | ✅ `v.hoopchina.com.cn/..._wz_transcode.mp4?auth_key=...` 27,284,140 B，h264 960×720 + aac，156.8s。**本地字节数与服务端 `content-length` 完全一致** |
+| 虎扑帖子页 | ✅ `bbs.hupu.com/<帖子ID>.html` → `<帖子标题>-步行街主干道-虎扑社区 (1) [<帖子ID>-1].mp4` 10,106,001 B，h264 1280×720 + aac，173.28s。**字节数与 HEAD 探测一致**；帖子内仅 1 个视频 |
+| 虎扑直链不带签名 | ❌ 去掉 `?auth_key=...` 后 **403** —— 签名是必需的 |
 | X / Twitter | ✅ `x.com/historyinmemes/status/1790637656616943991` 1.4MB，h264+aac，728×720，15.56s，**免登录免 cookie** |
 | X / Twitter（多视频推文） | ✅ `twitter.com/CTVJLaidlaw/status/1600649710662213632` 同一条推文里的多个视频全部下到，720×1280，113s / 102s |
 | B站 | ✅ `<B站视频ID>` 900.6 MiB，av1 1920×1080 + aac，3851.04s（64 分钟）。**前提是 yt-dlp ≥2026.08.19**，旧版 412，见坑 10 |
@@ -581,14 +604,16 @@ B站、Reddit、Instagram、Dailymotion 四个都栽在这上面。
 
 ## 已知限制
 
-- **⚠️ 白名单是硬闸（最容易踩的一条）**：`GENERIC_RE` 只放行 13 类链接形态
-  （YouTube / B站 / 腾讯视频 / 小红书 / X-Twitter / Vimeo / Dailymotion / t.co）。
+- **⚠️ 白名单是硬闸（最容易踩的一条）**：`GENERIC_RE` 只放行 14 类链接形态
+  （YouTube / B站 / 腾讯视频 / 小红书 / X-Twitter / Vimeo / Dailymotion / t.co / 虎扑），
+  外加下面的**直链媒体**规则。
   **白名单外的链接会在联网前就被拒**，报「没在输入里找到可识别的视频链接」——
   即使 yt-dlp 明明能下。已实测被拒的：微博、优酷、Niconico、TikTok、Twitch、
   SoundCloud、Reddit、Instagram、知乎视频、芒果TV、西瓜视频、爱奇艺、快手、Facebook。
-  yt-dlp 有 1848 个提取器，脚本只放行 13 类。
+  yt-dlp 有 1752 个提取器，脚本只放行 14 类。
   这是**故意的设计**（避免把聊天文本里的普通网址误判成视频），代价是覆盖面窄。
   绕过办法：直接 `yt-dlp "<链接>"`，或把域名加进 `GENERIC_RE`。
+  **遇到用户反复发的站点，就该把它加进白名单**（虎扑就是这么加进来的）。
 - **白名单内的站点也可能下不了**：白名单只保证「不会被提前拒掉」，不保证能下。
 - **⚠️ 腾讯视频：能不能下取决于「链接形态」，不是站点**（2026-09-27 补充实测）。
   同一个 `v.qq.com` 域名下有四种链接，行为完全不同：
@@ -704,6 +729,9 @@ B站、Reddit、Instagram、Dailymotion 四个都栽在这上面。
 | 直链 MP4 报「没在输入里找到可识别的视频链接」 | 2026-09-27 前的旧版会这样，`MEDIA_URL_RE` 已支持任意域名直链。若仍报错，检查扩展名是否在覆盖列表内 |
 | CDN 直链报 403 | **签名过期了**。看 `auth_key=<数字>-...` 里的 Unix 秒，`date -r <数字>` 换算成时间对比当前。过期就回原页面重新取链接 |
 | 直链下载后文件名是 `xxx [xxx].mp4` | 已修（见坑 15）。若又出现说明 `run_ytdlp()` 里按 `MEDIA_URL_RE.fullmatch` 选模板的分支被删了 |
+| 虎扑帖子页报「没在输入里找到可识别的视频链接」 | 2026-09-27 前的旧版会这样，`hupu.com` 已加入 `GENERIC_RE` |
+| 虎扑 CDN 直链 403 | 签名缺失或过期。链接必须**连 `?auth_key=...` 一起复制**；用 `date -r <时间戳>` 查是否过期 |
+| 白名单站点里混进了图片/JS 链接被当视频下 | 已加 `_ASSET_RE` 过滤静态资源后缀。**`.html` 不能加进去**（帖子页正是 `.html`） |
 | B站 `412 Precondition Failed` | 同上；换 cookie / 换 IP / 改 UA 都无效，升级 yt-dlp 才好。临时可用 `VIDEO_DL_YTDLP` 指向新版 |
 | 输出里报错跑到横幅前面 | 已修行缓冲（见坑 11）；若又出现说明 `main()` 的 `reconfigure` 被删了 |
 | 弹「允许访问 login.keychain-db」 | **已改为默认拒绝，不再弹窗**；若又出现说明 settings.json 规则被重置（见坑 7） |

@@ -82,6 +82,11 @@ GENERIC_RE = re.compile(
     r"(?:www\.)?bilibili\.com/[^\s\u4e00-\u9fff]+|"
     r"b23\.tv/[A-Za-z0-9]+|"
     r"v\.qq\.com/[^\s\u4e00-\u9fff]+|"
+    # 虎扑：帖子页里嵌的视频由 yt-dlp 通用提取器处理
+    # （它抓页面里带 auth_key 签名的 v.hoopchina.com.cn 直链）。
+    # 直链本身则由下面的 MEDIA_URL_RE 覆盖，两者互补。
+    r"(?:bbs|www|m|nba|voice)\.hupu\.com/[^\s\u4e00-\u9fff]+|"
+    r"hupu\.com/[^\s\u4e00-\u9fff]+|"
     r"(?:www\.)?xiaohongshu\.com/[^\s\u4e00-\u9fff]+|"
     r"xhslink\.com/[A-Za-z0-9]+|"
     # X / Twitter：www. / m. / mobile. 前缀，以及第三方镜像域名
@@ -110,6 +115,20 @@ MEDIA_URL_RE = re.compile(
     r"(?:\?" + _TERM + r"*)?",
     re.IGNORECASE)
 
+# 明显不是视频的静态资源后缀。
+#
+# 白名单是按**域名**放行的，路径不限，所以 `bbs.hupu.com/img/logo.png`
+# 这种也会被域名规则命中（虎扑帖子页里就满是图片链接）。
+# 与其让用户看到一条莫名其妙的「下载失败」，不如在提取阶段直接剔掉。
+#
+# ⚠️ 不能把 `.html` 列进来 —— 虎扑/微博这类**帖子页**正是 `.html`，
+# 那恰恰是我们想要的东西。同理 `.htm`。
+_ASSET_RE = re.compile(
+    r"\.(?:jpe?g|png|gif|webp|svg|ico|bmp|avif|heic|"
+    r"css|js|mjs|json|xml|woff2?|ttf|otf|eot|map|pdf|zip|apk|dmg)"
+    r"(?:$|[?#])",
+    re.IGNORECASE)
+
 
 def extract_urls(texts):
     """从文本里抠出所有可下载的链接，抖音优先，其余走通用通道"""
@@ -126,6 +145,8 @@ def extract_urls(texts):
                 seen.add(u); generic.append(u)
         for u in GENERIC_RE.findall(t):
             u = u.rstrip("/.,;:!?")
+            if _ASSET_RE.search(u):
+                continue          # 图片/CSS/JS 等静态资源，不是视频
             if u not in seen:
                 seen.add(u); generic.append(u)
     return douyin, generic
