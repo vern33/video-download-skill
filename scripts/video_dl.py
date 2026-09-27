@@ -17,6 +17,7 @@
 
 import argparse
 import datetime
+import json
 import os
 import re
 import shutil
@@ -216,6 +217,62 @@ def _call_ytdlp(base, url):
     return rc
 
 
+_GENERIC_TITLE_RE = re.compile(r"^[\w.\-]+ video #\S+$")
+
+
+def _fmt_duration(sec):
+    """秒 → 1:02:03 / 2:03；拿不到返回 None"""
+    if not isinstance(sec, (int, float)) or isinstance(sec, bool) or sec <= 0:
+        return None
+    total = int(round(sec))
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+def _info_one(base, url):
+    """--info 通道：拿 JSON 自己渲染，不用 yt-dlp 的 --print 模板。
+
+    模板引擎对缺失字段一律输出字面量 `NA`，于是腾讯视频会显示成
+    `✅ vqq-video video #<vid> | NA秒 | NA` —— 那个 ✅ 是对的，
+    但「NA秒 | NA」看着就像下载失败了。实际原因是 yt-dlp 的 vqq 提取器
+    本来就不返回 title/duration（dump-json 里 duration=None，
+    title 是 yt-dlp 兜底的通用占位 `{extractor} video #{id}`），
+    不是我们解析错，也不是站点挂了。
+
+    所以这里改成读 --dump-json，缺什么就明说「该站点未提供」，
+    避免把「元数据缺失」误报成「下载失败」。
+    """
+    p = subprocess.run(base + ["--skip-download", "--dump-json", url],
+                       capture_output=True, text=True)
+    if p.returncode != 0:
+        # yt-dlp 的报错走 stderr，原样透出，别吞掉
+        sys.stderr.write(p.stderr or "")
+        return p.returncode
+
+    line = next((l for l in (p.stdout or "").splitlines() if l.strip()), "")
+    try:
+        d = json.loads(line)
+    except Exception:
+        bad(f"解析元数据失败：{line[:120]}")
+        return 1
+
+    title = (d.get("title") or "").strip()
+    vid = d.get("id") or ""
+    dur = _fmt_duration(d.get("duration"))
+    uploader = (d.get("uploader") or d.get("channel") or "").strip()
+
+    if not title or _GENERIC_TITLE_RE.match(title):
+        # 通用占位标题对用户毫无信息量，直接换成人话
+        title = f"(该站点未提供标题) #{vid}" if vid else "(该站点未提供标题)"
+
+    parts = [title]
+    parts.append(f"时长 {dur}" if dur else "时长 该站点未提供")
+    parts.append(uploader if uploader else "作者 该站点未提供")
+    ok(" | ".join(parts))
+    return 0
+
+
 def run_ytdlp(urls, out_dir, quality, only_info):
     print("=" * 62)
     print(f"  通用通道（yt-dlp） · {len(urls)} 条链接")
@@ -248,9 +305,7 @@ def run_ytdlp(urls, out_dir, quality, only_info):
                 "-o", os.path.join(staging, "%(title).80s [%(id)s].%(ext)s")]
 
         if only_info:
-            base += ["--skip-download", "--print",
-                     "  ✅ %(title)s | %(duration)s秒 | %(uploader)s"]
-            rc = _call_ytdlp(base, url)
+            rc = _info_one(base, url)
         else:
             base += ["-f", "bv*+ba/b", "--merge-output-format", "mp4"]
             if quality:

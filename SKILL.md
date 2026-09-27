@@ -362,6 +362,63 @@ ERROR: unable to download video data: HTTP Error 403: Forbidden
 curl 能下而 yt-dlp 不能 → 大概率是代理/请求头差异，不是站点。
 再开 `-v` 看 `Proxy map` 这一行，最快。
 
+### 13. `--info` 的 `NA秒 | NA` 看着像失败，其实是元数据缺失（已修）
+
+**2026-09-27 定位。** 这条坑本身不影响下载，但会严重误导**汇报结论**——
+用户看到这行会以为站点下不了，从而把一个能下的平台划进「不支持」。
+
+旧实现用 yt-dlp 的 `--print` 模板渲染信息：
+
+```bash
+--print "  ✅ %(title)s | %(duration)s秒 | %(uploader)s"
+```
+
+模板引擎对**缺失字段一律输出字面量 `NA`**，于是腾讯视频长这样：
+
+```
+✅ vqq-video video #<vid> | NA秒 | NA
+```
+
+`✅` 是对的（链接完全有效），但 `NA秒 | NA` 读起来就是「坏了」。
+
+**真实原因**（`--dump-json` 直接验证）：
+
+```bash
+yt-dlp --dump-json --skip-download "https://v.qq.com/x/page/<vid>.html"
+```
+
+```
+title     = 'vqq-video video #<vid>'   ← yt-dlp 兜底的通用占位
+duration  = None                              ← 提取器压根不返回
+```
+
+yt-dlp 的 **vqq 提取器不解析标题和时长**，`title` 是它内部兜底的
+`{extractor} video #{id}` 格式，`duration` 就是 `None`。
+**不是我们解析错，更不是站点挂了。**
+
+**已修**：`--info` 不再走 `--print` 模板，改成 `--dump-json` 读 JSON 后自己渲染
+（见 `_info_one()`），缺什么就明说：
+
+```
+✅ (该站点未提供标题) #<vid> | 时长 该站点未提供 | 作者 该站点未提供
+```
+
+有元数据的站点顺带变好读了（`3851.04秒` → `1:04:11`）：
+
+```
+✅ <视频标题> | 时长 1:04:11 | <UP主>
+```
+
+**教训（比代码更重要）**：`NA` / `null` / 空占位符是**元数据问题**，
+不是**功能问题**。向用户汇报「某站点能不能下」之前，必须用**真实下载**确认，
+不能拿 `--info` 的输出来推断。判断「元数据缺失 vs 真的下不了」的最快办法：
+
+```bash
+yt-dlp --dump-json --skip-download "<链接>" | python3 -m json.tool | grep -E "title|duration"
+```
+
+`duration: null` 而链接能正常解析出格式列表 → 站点能下，只是没元数据。
+
 ## 实测记录
 
 | 平台 | 结果 |
@@ -370,6 +427,7 @@ curl 能下而 yt-dlp 不能 → 大概率是代理/请求头差异，不是站�
 | YouTube（短视频） | ✅ `Me at the zoo` 465K，av1+opus，19.02s（yt-dlp 自动合并音视频流） |
 | YouTube（长视频） | ✅ `罗马帝国千年全史 [NPDRrsu5hA4]` 292MB，av1 1920×1080 + opus，59:34 |
 | 腾讯视频 | ✅ 173MB，h264+aac，1280×720，21.5min（免费/试看内容；会员 DRM 正片拿不到） |
+| 腾讯视频（复验） | ✅ `<vid>` 61,334,594 B（58.49 MiB），h264 1280×720 + aac，215.96s。**旧版 `2025.10.22` 与新版 `2026.08.19` 两套 yt-dlp 各下一次，字节数完全一致** —— 说明该站点不吃版本。注意 `--info` 会显示「该站点未提供」元数据，别误判为失败（见坑 13） |
 | X / Twitter | ✅ `x.com/historyinmemes/status/1790637656616943991` 1.4MB，h264+aac，728×720，15.56s，**免登录免 cookie** |
 | X / Twitter（多视频推文） | ✅ `twitter.com/CTVJLaidlaw/status/1600649710662213632` 同一条推文里的多个视频全部下到，720×1280，113s / 102s |
 | B站 | ✅ `<B站视频ID>` 900.6 MiB，av1 1920×1080 + aac，3851.04s（64 分钟）。**前提是 yt-dlp ≥2026.08.19**，旧版 412，见坑 10 |
@@ -493,6 +551,7 @@ B站、Reddit、Instagram、Dailymotion 四个都栽在这上面。
 | 微信视频号链接（`weixin.qq.com/sph/...`） | **下不了，不用试**。网页端是启动器不是播放器，官方播放页拒绝一切浏览器。详见「已知限制」 |
 | 解析成功但下载阶段 `HTTP Error 403` | **先用 curl 打一下那个 CDN 地址**。curl 能下而 yt-dlp 不能 → 沙箱代理干的，脚本已自动 `--proxy ""` 重试（见坑 12） |
 | 小红书报 `No video formats found` | 链接缺 `xsec_token`。要用 App「分享 → 复制链接」的完整 URL，别手打短链 |
+| `--info` 显示 `NA秒 \| NA` 或通用占位标题 | **不是下载失败**，是该站点提取器不返回元数据（腾讯视频典型）。已改为显示「该站点未提供」。**别拿它推断站点能不能下**，要真实下载验证（见坑 13） |
 | B站 `412 Precondition Failed` | 同上；换 cookie / 换 IP / 改 UA 都无效，升级 yt-dlp 才好。临时可用 `VIDEO_DL_YTDLP` 指向新版 |
 | 输出里报错跑到横幅前面 | 已修行缓冲（见坑 11）；若又出现说明 `main()` 的 `reconfigure` 被删了 |
 | 弹「允许访问 login.keychain-db」 | **已改为默认拒绝，不再弹窗**；若又出现说明 settings.json 规则被重置（见坑 7） |
