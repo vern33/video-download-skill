@@ -412,6 +412,21 @@ B站、Reddit、Instagram、Dailymotion 四个都栽在这上面。
 - **会员/付费内容**：各平台的 DRM 正片都拿不到，只能下免费或试看部分。
 - **需要登录的内容**：YouTube 年龄限制视频等可能需要 cookies，当前未配置。
 - **X / Twitter 私密内容**：仅粉丝可见、敏感/年龄限制的推文拿不到，只有公开推文可下（这是 X 的服务端边界，不是脚本问题）。
+- **微信视频号（`weixin.qq.com/sph/...`）下不了，别浪费时间**（2026-09-27 深挖过一轮）：
+  - yt-dlp **没有**视频号提取器（`ls extractor/` 无 weixin/channels/sph）
+  - 短链跳到 `channels.weixin.qq.com/finder-preview/pages/sph?id=xxx`，这是个**启动器不是播放器**：
+    它的动作是 `WeixinJSBridge.invoke("openFinderView", {extInfo:{action:"openFinderFeed", feedID:"export/..."}})`
+    —— 让微信客户端原生打开。数据模块还会等 `WeixinJSBridgeReady` 事件，
+    而这个对象由微信客户端原生注入，普通浏览器里**永远不触发** → 页面一个数据请求都不发。
+  - 唯一的 web 接口 `POST /finder-preview/api/feed/get_feed_info`
+    （body `{"baseReq":{"generalToken":""},"shortUri":"<短ID>"}`，`generalToken` 可为空）
+    **能通、免登录**，但只返回 UP主/文案/互动数/**封面图**，`picInfo` 是空数组，**没有视频地址**。
+    ⚠️ 用 curl 直接打会 `permission verification failed`，必须在浏览器页面上下文里 fetch（同抖音通道思路）。
+  - 官方 web 播放页 `channels.weixin.qq.com/web/pages/feed?eid=...` 会**把任何浏览器 UA 重定向**到
+    `support.weixin.qq.com/update/` 并提示「当前微信版本较低」。实测 iOS 8.0.49 / 8.0.78 / 8.0.85
+    和 macOS/Windows 微信 UA 全被拒——**不是版本门，是「非微信客户端一律拒绝」**。
+  - 唯一可行路径是走微信客户端本身（播放时抓包 / 读客户端缓存再解密），
+    依赖用户已登录的微信会话，脚本层面做不到。
 - **X / Twitter 已删除内容**：推文或直播被删会报 `No video could be found in this tweet` / `Broadcast no longer exists`，属正常情况，不是 bug。
 
 ## 故障排查
@@ -425,6 +440,7 @@ B站、Reddit、Instagram、Dailymotion 四个都栽在这上面。
 | 推文下载很慢 / 中途超时 | 一条推文可能含多个长视频，yt-dlp 会全部下完；放后台跑或加长超时 |
 | 进度 100% 后报 rename / `.part` 相关错误 | 目标目录不在全放行区，确认走 `/tmp` 中转逻辑（见坑 5） |
 | **任何站点突然 `HTTP Error 412` / 解析失败** | **先查 `yt-dlp --version` 对比最新版**，多半是版本旧了，别怀疑站点封了你（见坑 10） |
+| 微信视频号链接（`weixin.qq.com/sph/...`） | **下不了，不用试**。网页端是启动器不是播放器，官方播放页拒绝一切浏览器。详见「已知限制」 |
 | B站 `412 Precondition Failed` | 同上；换 cookie / 换 IP / 改 UA 都无效，升级 yt-dlp 才好。临时可用 `VIDEO_DL_YTDLP` 指向新版 |
 | 输出里报错跑到横幅前面 | 已修行缓冲（见坑 11）；若又出现说明 `main()` 的 `reconfigure` 被删了 |
 | 弹「允许访问 login.keychain-db」 | **已改为默认拒绝，不再弹窗**；若又出现说明 settings.json 规则被重置（见坑 7） |
