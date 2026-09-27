@@ -412,7 +412,11 @@ B站、Reddit、Instagram、Dailymotion 四个都栽在这上面。
 - **会员/付费内容**：各平台的 DRM 正片都拿不到，只能下免费或试看部分。
 - **需要登录的内容**：YouTube 年龄限制视频等可能需要 cookies，当前未配置。
 - **X / Twitter 私密内容**：仅粉丝可见、敏感/年龄限制的推文拿不到，只有公开推文可下（这是 X 的服务端边界，不是脚本问题）。
-- **微信视频号（`weixin.qq.com/sph/...`）下不了，别浪费时间**（2026-09-27 深挖过一轮）：
+- **微信视频号（`weixin.qq.com/sph/...`）下不了，别浪费时间**（2026-09-27 深挖过一轮）。
+  ⚠️ **先分清**：这是**微信视频号**，不是**腾讯视频**。腾讯视频是 `v.qq.com`，
+  有 `VQQVideoIE` 提取器，**正常可下**（实测 58.49MB / 1280×720 / 216s）。
+  两者同属腾讯但技术栈完全不同，别互相牵连。
+  以下才是视频号的情况：
   - yt-dlp **没有**视频号提取器（`ls extractor/` 无 weixin/channels/sph）
   - 短链跳到 `channels.weixin.qq.com/finder-preview/pages/sph?id=xxx`，这是个**启动器不是播放器**：
     它的动作是 `WeixinJSBridge.invoke("openFinderView", {extInfo:{action:"openFinderFeed", feedID:"export/..."}})`
