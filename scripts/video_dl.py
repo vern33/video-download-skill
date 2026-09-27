@@ -93,6 +93,23 @@ GENERIC_RE = re.compile(
     r"(?:www\.)?dailymotion\.com/video/[^\s\u4e00-\u9fff]+"
     r")")
 
+# 直链媒体文件：路径以已知音视频扩展名结尾。
+#
+# 这类链接**本身就是「这是视频」的正面证据**，不该受域名白名单限制——
+# 白名单存在的意义是避免把聊天文本里的普通网址误判成视频，
+# 而 `.mp4` 结尾根本不存在这种歧义。用户贴虎扑/OSS 这类 CDN 直链是常见场景，
+# 之前会被「没在输入里找到可识别的视频链接」直接拒掉。
+#
+# ⚠️ 查询串必须完整保留：CDN 直链常带 `?auth_key=<过期时间>-...-<签名>`，
+# 去掉就 403。所以这里不能用 rstrip 砍 `?` 之后的内容。
+_TERM = r"[^\s\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]"   # 不含空白与中日韩标点
+_MEDIA_EXT = (r"mp4|m4v|mov|webm|mkv|avi|flv|wmv|mpg|mpeg|m3u8|mpd|"
+              r"m4s|ts|mp3|m4a|aac|wav|flac|ogg|opus")
+MEDIA_URL_RE = re.compile(
+    r"https?://" + _TERM + r"+?\." + r"(?:" + _MEDIA_EXT + r")"
+    r"(?:\?" + _TERM + r"*)?",
+    re.IGNORECASE)
+
 
 def extract_urls(texts):
     """从文本里抠出所有可下载的链接，抖音优先，其余走通用通道"""
@@ -102,6 +119,11 @@ def extract_urls(texts):
             u = u.rstrip("/.,;:!?")
             if u not in seen:
                 seen.add(u); douyin.append(u)
+        # 直链媒体先认，避免它落在白名单之外被漏掉
+        for u in MEDIA_URL_RE.findall(t):
+            u = u.rstrip("/.,;:!?")
+            if u not in seen:
+                seen.add(u); generic.append(u)
         for u in GENERIC_RE.findall(t):
             u = u.rstrip("/.,;:!?")
             if u not in seen:
@@ -309,9 +331,17 @@ def run_ytdlp(urls, out_dir, quality, only_info):
                 except OSError:
                     pass
 
+        # 直链媒体的 title 和 id 是同一个东西（都是文件名），
+        # 套通用模板会得到 `xxx [xxx].mp4` 这种自我重复的名字，
+        # 所以这类链接单独用不带 [%(id)s] 的模板。
+        if MEDIA_URL_RE.fullmatch(url):
+            outtmpl = os.path.join(staging, "%(title).100s.%(ext)s")
+        else:
+            outtmpl = os.path.join(staging, "%(title).80s [%(id)s].%(ext)s")
+
         base = [_env.ytdlp_bin(), "--no-warnings", "--newline",
                 "--no-playlist", "--no-mtime",
-                "-o", os.path.join(staging, "%(title).80s [%(id)s].%(ext)s")]
+                "-o", outtmpl]
 
         if only_info:
             rc = _info_one(base, url)

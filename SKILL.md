@@ -1,6 +1,6 @@
 ---
 name: video-download
-description: 下载网络视频到本地。当用户发来视频链接或分享文本，或说「下载这个视频」「把这个视频存下来」「存一下」「帮我下载」时使用。支持抖音（v.douyin.com 短链、douyin.com/video/数字ID）、YouTube（youtube.com/watch、youtu.be）、B站（bilibili.com、b23.tv）、腾讯视频（v.qq.com）、小红书（xiaohongshu.com、xhslink.com）、X/Twitter、Vimeo、Dailymotion 等数千个站点。按平台自动分发：抖音走浏览器内请求方案（启动 Playwright Chromium + --no-sandbox，在页面上下文 fetch 详情接口通过 Argus 风控），其余站点走 yt-dlp。输入可以直接是带噪音的分享文本（如「2.56 复制打开抖音，看看【xxx的作品】… :6pm 12/25 pQK:/ P@k.Px」或「看看这个 https://... 帮我下一下」），脚本会自己提取链接。支持一次传多条、混合平台链接，会分通道处理。产物默认落在 ~/Downloads/视频/。
+description: 下载网络视频到本地。当用户发来视频链接或分享文本，或说「下载这个视频」「把这个视频存下来」「存一下」「帮我下载」时使用。支持抖音（v.douyin.com 短链、douyin.com/video/数字ID）、YouTube（youtube.com/watch、youtu.be）、B站（bilibili.com、b23.tv）、腾讯视频（v.qq.com）、小红书（xiaohongshu.com、xhslink.com）、X/Twitter、Vimeo、Dailymotion 等数千个站点，**以及任意域名的直链媒体文件**（以 .mp4/.m3u8/.mov/.ts/.mp3 等结尾的 URL，含带 `auth_key` 签名的 CDN 直链，如虎扑 `v.hoopchina.com.cn/...mp4?auth_key=...`）。按平台自动分发：抖音走浏览器内请求方案（启动 Playwright Chromium + --no-sandbox，在页面上下文 fetch 详情接口通过 Argus 风控），其余站点走 yt-dlp。输入可以直接是带噪音的分享文本（如「2.56 复制打开抖音，看看【xxx的作品】… :6pm 12/25 pQK:/ P@k.Px」或「看看这个 https://... 帮我下一下」），脚本会自己提取链接。支持一次传多条、混合平台链接，会分通道处理。产物默认落在 ~/Downloads/视频/。
 agent_created: true
 ---
 
@@ -31,9 +31,29 @@ python3 ~/.workbuddy-ai/skills/video-download/scripts/video_dl.py "<用户原话
 | 平台 | 通道 | 机制 |
 |---|---|---|
 | 抖音 | 浏览器方案 | Playwright Chromium + `--no-sandbox`，页面内 fetch |
+| **直链媒体文件** | yt-dlp | 路径以 `.mp4/.m3u8/.mov/.ts/.mp3` 等结尾，**不限域名**，查询串原样保留 |
 | 其他全部 | yt-dlp | 系统已装 `yt-dlp` + `ffmpeg` |
 
 抖音之所以特殊：它的 Argus 风控要求 `UIFID_TEMP` / `s_v_web_id` cookie 且**服务端校验真实性**，Python 直连还会因 TLS 指纹不同吃 403，所以必须在真实浏览器上下文里发请求。其他站点 yt-dlp 直接就能处理。
+
+### 直链媒体文件（2026-09-27 新增）
+
+`MEDIA_URL_RE` 会额外放行**任意域名**下以已知音视频扩展名结尾的 URL。
+
+为什么它不受白名单限制：白名单存在的意义是避免把聊天文本里的普通网址**误判**成视频，
+而 `.mp4` 结尾本身就是「这是视频」的**正面证据**，不存在这种歧义。
+用户贴 CDN 直链是常见场景（实测案例：虎扑 `v.hoopchina.com.cn/bbs-editor-web/..._wz_transcode.mp4?auth_key=...`），
+之前会被「没在输入里找到可识别的视频链接」直接拒掉。
+
+覆盖扩展名：`mp4 m4v mov webm mkv avi flv wmv mpg mpeg m3u8 mpd m4s ts mp3 m4a aac wav flac ogg opus`
+
+**⚠️ 查询串必须完整保留**：CDN 直链常带 `?auth_key=<过期时间>-<优先级>-<随机>-<签名>`，
+去掉就 403。所以正则允许查询串，且**不能用 `rstrip` 砍掉 `?` 之后的内容**。
+签名里的时间戳是 Unix 秒（如 `1790534765` → `2026-09-28 02:46:05`），过期前下完即可。
+
+**命名**：直链的 `title` 和 `id` 是同一个东西（都是文件名），
+套通用模板会得到 `xxx [xxx].mp4` 这种自我重复的名字，
+所以这类链接走不带 `[%(id)s]` 的模板（见坑 15）。
 
 ### X / Twitter 的链接形态
 
@@ -459,6 +479,33 @@ WARNING: [vqq:series] unable to extract pinia data; please report this issue ...
 和「链接是列表页」的共同表现，必须显式识别，否则会变成一句让用户和未来的自己
 都摸不着头脑的报错。
 
+### 15. 直链媒体的文件名会自我重复（已修）
+
+**2026-09-27 定位。** 用户发虎扑 CDN 直链，第一次下载得到：
+
+```
+c5a26a4b6ddcf1949481b8f6cd0337c2_wz_transcode [c5a26a4b6ddcf1949481b8f6cd0337c2_wz_transcode].mp4
+                                                        ↑ 括号里又重复了一遍
+```
+
+**原因**：通用输出模板是 `%(title).80s [%(id)s].%(ext)s`（`[id]` 是为了让
+B站/YouTube 这类站点能一眼认出视频 ID）。但 yt-dlp 的**通用提取器处理直链时，
+`title` 和 `id` 都取自文件名**——于是两个字段一模一样，模板就把名字打了两遍。
+
+**已修**：`run_ytdlp()` 里按链接形态选模板——
+
+```python
+if MEDIA_URL_RE.fullmatch(url):
+    outtmpl = os.path.join(staging, "%(title).100s.%(ext)s")      # 直链：不要 [id]
+else:
+    outtmpl = os.path.join(staging, "%(title).80s [%(id)s].%(ext)s")
+```
+
+修复后：`c5a26a4b6ddcf1949481b8f6cd0337c2_wz_transcode.mp4`
+
+**教训**：`title` 和 `id` 在「有元数据的站点」和「直链」两种情况下语义不同，
+不能指望同一个输出模板两边都好看。
+
 ## 实测记录
 
 | 平台 | 结果 |
@@ -471,6 +518,7 @@ WARNING: [vqq:series] unable to extract pinia data; please report this issue ...
 | 腾讯视频（三验） | ✅ 同上，2026-09-27 20:39 当场再下一次，`61334594 bytes`，与之前逐位一致 |
 | 腾讯视频（专辑页） | ❌ `/x/cover/<cid>.html` 走 `vqq:series`，提取器已失效，**退出码 0 但输出为空**（见坑 14） |
 | 腾讯视频（专辑内分集） | ⚠️ 取决于该集本身：实测某集返回 `Tencent said: 这个视频被外星人劫走，暂时看不了了~` |
+| 直链媒体（虎扑 CDN） | ✅ `v.hoopchina.com.cn/..._wz_transcode.mp4?auth_key=...` 27,284,140 B，h264 960×720 + aac，156.8s。**本地字节数与服务端 `content-length` 完全一致** |
 | X / Twitter | ✅ `x.com/historyinmemes/status/1790637656616943991` 1.4MB，h264+aac，728×720，15.56s，**免登录免 cookie** |
 | X / Twitter（多视频推文） | ✅ `twitter.com/CTVJLaidlaw/status/1600649710662213632` 同一条推文里的多个视频全部下到，720×1280，113s / 102s |
 | B站 | ✅ `<B站视频ID>` 900.6 MiB，av1 1920×1080 + aac，3851.04s（64 分钟）。**前提是 yt-dlp ≥2026.08.19**，旧版 412，见坑 10 |
@@ -653,6 +701,9 @@ B站、Reddit、Instagram、Dailymotion 四个都栽在这上面。
 | `--info` 显示 `NA秒 \| NA` 或通用占位标题 | **不是下载失败**，是该站点提取器不返回元数据（腾讯视频典型）。已改为显示「该站点未提供」。**别拿它推断站点能不能下**，要真实下载验证（见坑 13） |
 | `--info` 报「该链接解析结果为空」 | 多半是**专辑/播放列表页**（腾讯视频 `/x/cover/<cid>.html`）。该形态走 `vqq:series`，提取器已失效，**退出码 0 但无输出**。换成单集页 `/x/page/<vid>.html`（见坑 14） |
 | 腾讯视频下不了，但别人说能下 | **先看链接形态**：`/x/page/<vid>.html` 能下；`/x/cover/<cid>.html` 专辑页不能下；专辑内分集看该集是否付费 |
+| 直链 MP4 报「没在输入里找到可识别的视频链接」 | 2026-09-27 前的旧版会这样，`MEDIA_URL_RE` 已支持任意域名直链。若仍报错，检查扩展名是否在覆盖列表内 |
+| CDN 直链报 403 | **签名过期了**。看 `auth_key=<数字>-...` 里的 Unix 秒，`date -r <数字>` 换算成时间对比当前。过期就回原页面重新取链接 |
+| 直链下载后文件名是 `xxx [xxx].mp4` | 已修（见坑 15）。若又出现说明 `run_ytdlp()` 里按 `MEDIA_URL_RE.fullmatch` 选模板的分支被删了 |
 | B站 `412 Precondition Failed` | 同上；换 cookie / 换 IP / 改 UA 都无效，升级 yt-dlp 才好。临时可用 `VIDEO_DL_YTDLP` 指向新版 |
 | 输出里报错跑到横幅前面 | 已修行缓冲（见坑 11）；若又出现说明 `main()` 的 `reconfigure` 被删了 |
 | 弹「允许访问 login.keychain-db」 | **已改为默认拒绝，不再弹窗**；若又出现说明 settings.json 规则被重置（见坑 7） |
