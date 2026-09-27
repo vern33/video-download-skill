@@ -7,7 +7,7 @@
 
 输入可以直接是带噪音的分享文本，脚本会自己把链接抠出来。
 
-> 本项目是一个 [WorkBuddy](https://www.workbuddy.cn) Skill，也可以当独立命令行工具用。
+> 本项目是一个 [WorkBuddy](https://workbuddy.ai/invite?code=Y7CADHL3) Skill，也可以当独立命令行工具用。
 
 ## 特性
 
