@@ -251,6 +251,15 @@ def _info_one(base, url):
         return p.returncode
 
     line = next((l for l in (p.stdout or "").splitlines() if l.strip()), "")
+    if not line:
+        # yt-dlp 对「专辑/播放列表页」可能**返回空但退出码 0**。
+        # 典型：腾讯视频 /x/cover/<cid>.html 走 vqq:series 提取器，
+        # 而该提取器已失效（`WARNING: unable to extract pinia data`），
+        # 于是产出空播放列表 —— 不报错，也没有任何内容。
+        # 必须在这里明说，否则用户只会看到一句没头没尾的「解析失败：」。
+        warn("该链接解析结果为空：可能是专辑/播放列表页，或该站点的列表提取器已失效")
+        info("换成单集页面链接再试（腾讯视频：/x/page/<vid>.html）")
+        return 1
     try:
         d = json.loads(line)
     except Exception:
