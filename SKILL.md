@@ -324,6 +324,44 @@ a premium member`——看到这行说明「不是我们没下到，是账号权
 两者不共享缓冲，导致子进程的报错**跑到横幅前面**，看起来像「一开始就炸了」，
 排查时会把因果关系判断反。已在 `main()` 里 `sys.stdout.reconfigure(line_buffering=True)` 修掉。
 
+### 12. 沙箱代理会让媒体 CDN 返回 403（看着像站点封控）
+
+**2026-09-27 定位，比坑 10 更隐蔽。**
+
+小红书真实链接解析成功、拿到格式列表后，下载阶段报：
+
+```
+ERROR: unable to download video data: HTTP Error 403: Forbidden
+```
+
+`403 Forbidden` 长得极像 CDN 防盗链，于是先试了加 `Referer`、换桌面 UA —— **全都没用**。
+把 CDN 地址（`http://sns-bak-v6.xhscdn.com/stream/1/110/258/…_258.mp4`）拿出来用 curl 直接打，
+**HTTP 200 / 2,745,772 字节 / video/mp4**，完全正常。
+
+矛盾点就在这里：**同一台机器、同一个地址，curl 通、yt-dlp 不通**。
+开 `-v` 看 yt-dlp 的调试日志，答案在第二行：
+
+```
+[debug] Proxy map: {'http': 'http://127.0.0.1:1082', 'https': 'http://127.0.0.1:1082'}
+```
+
+**yt-dlp 走了 WorkBuddy 沙箱注入的本地代理，那个代理对该 CDN 返回 403。**
+
+对照实验（同一个 URL，只改代理）：
+
+| 条件 | 结果 |
+|---|---|
+| 默认（走代理） | ❌ `HTTP Error 403` |
+| `--proxy ""` | ✅ 100% 2.62MiB |
+| 清空 `http_proxy` / `https_proxy` 环境变量 | ✅ 100% 2.62MiB |
+
+**已修**：`_call_ytdlp()` 在第一次失败且环境里有代理时，自动加 `--proxy ""` 重试一次
+（只在失败后触发，正常路径不受影响）。
+
+**排查心法**：遇到下载阶段的 4xx，先问「**curl 能下吗**」。
+curl 能下而 yt-dlp 不能 → 大概率是代理/请求头差异，不是站点。
+再开 `-v` 看 `Proxy map` 这一行，最快。
+
 ## 实测记录
 
 | 平台 | 结果 |
@@ -335,6 +373,7 @@ a premium member`——看到这行说明「不是我们没下到，是账号权
 | X / Twitter | ✅ `x.com/historyinmemes/status/1790637656616943991` 1.4MB，h264+aac，728×720，15.56s，**免登录免 cookie** |
 | X / Twitter（多视频推文） | ✅ `twitter.com/CTVJLaidlaw/status/1600649710662213632` 同一条推文里的多个视频全部下到，720×1280，113s / 102s |
 | B站 | ✅ `<B站视频ID>` 900.6 MiB，av1 1920×1080 + aac，3851.04s（64 分钟）。**前提是 yt-dlp ≥2026.08.19**，旧版 412，见坑 10 |
+| 小红书 | ✅ `<视频标题>` 2.62 MiB，h264 720×1280 + aac，11.12s。**必须用带 `xsec_token` 的真实分享链接**，见「已知限制」 |
 | 跨平台改造回归 | ✅ 抖音 `f6e7f6a5…db7243d` / YouTube `Me at the zoo`，SHA256 与改造前逐位一致 |
 
 跨平台改造的验证方式：删掉旧 venv 后从零跑抖音通道，确认
@@ -368,6 +407,7 @@ Windows `Scripts/python.exe` 布局识别。
 | Dailymotion | 136.71MiB | 186.8s | h264 1920×1080 | **仅新版** |
 | 知乎视频 | 10.16MiB | 146.3s | h264 1280×720 | **仅新版** |
 | 芒果TV | 5.34MiB | 30.1s（只取片段） | h264 1280×720 | **仅新版** |
+| 小红书 | 2.62MiB | 11.12s | h264 720×1280 | 需带 `xsec_token` 的真实分享链接 |
 
 **实测不可下**（均为 `2026.08.19` 新版复测结论）：
 
@@ -376,7 +416,6 @@ Windows `Scripts/python.exe` 布局识别。
 | Vimeo | `The web client only works when logged-in` | 真需登录（2/2 链接） |
 | Facebook | `only available for registered users` / `Cannot parse data` | 真需登录（2/2） |
 | 爱奇艺 | `Can't find any video` | 提取器失效（2/2） |
-| 小红书 | `No video formats found` | 提取器失效（2/2），**注意它在白名单内，会走到这一步** |
 | 西瓜视频 | `Cookies (not necessarily logged in) are needed` | 需 cookie |
 | 网易云音乐 | `HTTP Error 403` | 403 |
 | 搜狐视频 | `HTTP Error 403` | 403（2/2） |
@@ -388,6 +427,8 @@ Windows `Scripts/python.exe` 布局识别。
 定性必须**同站点换 2–3 条链接重试**，否则分不清「站点不支持」和「这条链接失效了」。
 **再加一条：定性前先确认 yt-dlp 是最新版**，否则会把版本问题写成站点限制——
 B站、Reddit、Instagram、Dailymotion 四个都栽在这上面。
+**还有一条：`_TESTS` 里的裸链接可能缺关键参数**（如小红书的 `xsec_token`），
+会误判成「提取器失效」。**站点级结论必须用用户真实分享的链接复测一遍。**
 
 ## 已知限制
 
@@ -400,8 +441,13 @@ B站、Reddit、Instagram、Dailymotion 四个都栽在这上面。
   这是**故意的设计**（避免把聊天文本里的普通网址误判成视频），代价是覆盖面窄。
   绕过办法：直接 `yt-dlp "<链接>"`，或把域名加进 `GENERIC_RE`。
 - **白名单内的站点也可能下不了**：白名单只保证「不会被提前拒掉」，不保证能下。
-  实测 `小红书` 和 `Vimeo` 都在白名单内，但前者提取器失效（`No video formats found`）、
-  后者要求登录。**白名单 ≠ 可用性保证。**
+  实测 `Vimeo` 在白名单内但要求登录。**白名单 ≠ 可用性保证。**
+- **小红书：能下，但必须用带 `xsec_token` 的真实分享链接**（2026-09-27 修正）。
+  之前判它「提取器失效」是**错的**，错了两次：
+  1. 拿 yt-dlp `_TESTS` 里的裸链接测 → 没有 `xsec_token` → `No video formats found`
+  2. 用真实链接测 → 报 `HTTP Error 403`，但那**是沙箱代理造成的**，不是站点
+  正确姿势：从 App「分享 → 复制链接」拿到的完整 URL（含 `xsec_token=...`）直接贴进来即可，
+  脚本无需任何额外参数。实测 `2.62MiB / h264 720×1280 / 11.12s`。
 - **优酷必须带 `Referer`**：不带报 `HTTP Error 403: Forbidden`，且报错发生在
   **解析成功之后的下载阶段**，极易误判成「站点不支持」。加
   `--referer "https://v.youku.com/"` 即可（脚本目前没加，所以即使放开白名单也下不了）。
@@ -445,6 +491,8 @@ B站、Reddit、Instagram、Dailymotion 四个都栽在这上面。
 | 进度 100% 后报 rename / `.part` 相关错误 | 目标目录不在全放行区，确认走 `/tmp` 中转逻辑（见坑 5） |
 | **任何站点突然 `HTTP Error 412` / 解析失败** | **先查 `yt-dlp --version` 对比最新版**，多半是版本旧了，别怀疑站点封了你（见坑 10） |
 | 微信视频号链接（`weixin.qq.com/sph/...`） | **下不了，不用试**。网页端是启动器不是播放器，官方播放页拒绝一切浏览器。详见「已知限制」 |
+| 解析成功但下载阶段 `HTTP Error 403` | **先用 curl 打一下那个 CDN 地址**。curl 能下而 yt-dlp 不能 → 沙箱代理干的，脚本已自动 `--proxy ""` 重试（见坑 12） |
+| 小红书报 `No video formats found` | 链接缺 `xsec_token`。要用 App「分享 → 复制链接」的完整 URL，别手打短链 |
 | B站 `412 Precondition Failed` | 同上；换 cookie / 换 IP / 改 UA 都无效，升级 yt-dlp 才好。临时可用 `VIDEO_DL_YTDLP` 指向新版 |
 | 输出里报错跑到横幅前面 | 已修行缓冲（见坑 11）；若又出现说明 `main()` 的 `reconfigure` 被删了 |
 | 弹「允许访问 login.keychain-db」 | **已改为默认拒绝，不再弹窗**；若又出现说明 settings.json 规则被重置（见坑 7） |
