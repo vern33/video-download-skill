@@ -342,46 +342,66 @@ a premium member`——看到这行说明「不是我们没下到，是账号权
 `execv` 重入成功，且产物哈希不变；另外单独验证了 5 个环境变量覆盖 +
 Windows `Scripts/python.exe` 布局识别。
 
-### 更大范围站点实测（2026-09-27，共 18 个站点）
+### 更大范围站点实测（2026-09-27）
 
-**先说前提：白名单是一道硬闸。** 下面这些站点虽然 yt-dlp 能下，但**脚本会直接拒绝**
-（`GENERIC_RE` 没命中），要下得绕过脚本直接调 `yt-dlp`。详见「已知限制」。
+**先说两个前提，不看会得出错误结论：**
 
-**yt-dlp 层面实测可下**（用 `-f "bv*+ba/b"` 真实下载并 ffprobe 校验）：
+1. **白名单是一道硬闸。** 很多站点 yt-dlp 明明能下，但**脚本会直接拒绝**
+   （`GENERIC_RE` 没命中），要下得绕过脚本直接调 `yt-dlp`。详见「已知限制」。
+2. **下面的结论依赖 yt-dlp 版本。** 第一轮实测用的是旧版 `2025.10.22`，
+   后来发现 B站 的「412 反爬」其实是版本旧（见坑 10），于是**用 `2026.08.19` 全量重测**，
+   有 3 个站点直接翻转。**换 yt-dlp 版本后，本表的"不可下"必须重测。**
 
-| 站点 | 大小 | 时长 | 视频 |
-|---|---|---|---|
-| 微博 | 63.97MB | 918.7s | h264 1280×720 |
-| 优酷 | 50.32MB | 702.1s | h264 640×360 ⚠️ 需 Referer |
-| Niconico | 10.94MB | 219.1s | h264 480×360 |
-| SoundCloud | 7.64MB | 397.2s | 纯音频 aac |
-| TikTok | 2.62MB | 27.5s | h264 540×960 |
-| Twitch | 1.18MB | 20.0s | h264 640×360 |
+**yt-dlp 实测可下**（真实下载 + ffprobe 校验）：
 
-**实测不可下**：
+| 站点 | 大小 | 时长 | 视频 | 版本 |
+|---|---|---|---|---|
+| 微博 | 63.97MB | 918.7s | h264 1280×720 | 旧版即通过 |
+| 优酷 | 50.32MB | 702.1s | h264 640×360 ⚠️ **需 `Referer: https://v.youku.com/`** | 旧版即通过 |
+| Niconico | 10.94MB | 219.1s | h264 480×360 | 旧版即通过 |
+| SoundCloud | 7.64MB | 397.2s | 纯音频 aac | 旧版即通过 |
+| TikTok | 2.62MB | 27.5s | h264 540×960 | 旧版即通过 |
+| Twitch | 1.18MB | 20.0s | h264 640×360 | 旧版即通过 |
+| B站 | 900.6MiB | 3851.0s | av1 1920×1080 | **仅新版** |
+| Reddit | 13.93MB | 13.7s | h264 608×1080 | **仅新版** |
+| Instagram | 1.85MB | 5.0s | h264 720×1280 | **仅新版** |
+| Dailymotion | 136.71MiB | 186.8s | h264 1920×1080 | **仅新版** |
+| 知乎视频 | 10.16MiB | 146.3s | h264 1280×720 | **仅新版** |
+| 芒果TV | 5.34MiB | 30.1s（只取片段） | h264 1280×720 | **仅新版** |
+
+**实测不可下**（均为 `2026.08.19` 新版复测结论）：
 
 | 站点 | 报错 | 根因 |
 |---|---|---|
-| B站 | `HTTP Error 412: Precondition Failed` | 反爬。换 2 个 BV 号 + 覆盖 Chrome UA，三次全 412 → **站点级**，非链接失效 |
-| Vimeo / Reddit / Instagram / Facebook | `login required` 类 | 必须登录 |
-| 爱奇艺 | `Can't find any video` | 换 2 条链接一样 |
-| 小红书 | `No video formats found` | 换 2 条链接一样 |
-| Dailymotion | `Not found` | 4 条测试链接全失效，**无法验证** |
-| 快手 | — | yt-dlp **根本没有**快手提取器 |
+| Vimeo | `The web client only works when logged-in` | 真需登录（2/2 链接） |
+| Facebook | `only available for registered users` / `Cannot parse data` | 真需登录（2/2） |
+| 爱奇艺 | `Can't find any video` | 提取器失效（2/2） |
+| 小红书 | `No video formats found` | 提取器失效（2/2），**注意它在白名单内，会走到这一步** |
+| 西瓜视频 | `Cookies (not necessarily logged in) are needed` | 需 cookie |
+| 网易云音乐 | `HTTP Error 403` | 403 |
+| 搜狐视频 | `HTTP Error 403` | 403（2/2） |
+| 百度视频 | `HTTP Error 403` | 403 |
+| 快手 | — | yt-dlp **根本没有**快手提取器（`ls extractor/` 无 kuaishou） |
+| 抖音（走 yt-dlp） | `Fresh cookies (not necessarily logged in) are needed` | **这正是脚本自建浏览器通道的原因** |
 
 **方法论**：测试链接从 yt-dlp 提取器的 `_TESTS` 数组里取，真实且长期有效。
 定性必须**同站点换 2–3 条链接重试**，否则分不清「站点不支持」和「这条链接失效了」。
+**再加一条：定性前先确认 yt-dlp 是最新版**，否则会把版本问题写成站点限制——
+B站、Reddit、Instagram、Dailymotion 四个都栽在这上面。
 
 ## 已知限制
 
 - **⚠️ 白名单是硬闸（最容易踩的一条）**：`GENERIC_RE` 只放行 13 类链接形态
   （YouTube / B站 / 腾讯视频 / 小红书 / X-Twitter / Vimeo / Dailymotion / t.co）。
   **白名单外的链接会在联网前就被拒**，报「没在输入里找到可识别的视频链接」——
-  即使 yt-dlp 明明能下。已实测被拒的：Instagram、微博、优酷、爱奇艺、快手、
-  Twitch、Facebook、Niconico、TikTok、SoundCloud、Reddit。
+  即使 yt-dlp 明明能下。已实测被拒的：微博、优酷、Niconico、TikTok、Twitch、
+  SoundCloud、Reddit、Instagram、知乎视频、芒果TV、西瓜视频、爱奇艺、快手、Facebook。
   yt-dlp 有 1848 个提取器，脚本只放行 13 类。
   这是**故意的设计**（避免把聊天文本里的普通网址误判成视频），代价是覆盖面窄。
   绕过办法：直接 `yt-dlp "<链接>"`，或把域名加进 `GENERIC_RE`。
+- **白名单内的站点也可能下不了**：白名单只保证「不会被提前拒掉」，不保证能下。
+  实测 `小红书` 和 `Vimeo` 都在白名单内，但前者提取器失效（`No video formats found`）、
+  后者要求登录。**白名单 ≠ 可用性保证。**
 - **优酷必须带 `Referer`**：不带报 `HTTP Error 403: Forbidden`，且报错发生在
   **解析成功之后的下载阶段**，极易误判成「站点不支持」。加
   `--referer "https://v.youku.com/"` 即可（脚本目前没加，所以即使放开白名单也下不了）。
