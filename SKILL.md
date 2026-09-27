@@ -25,6 +25,25 @@ python3 ~/.workbuddy-ai/skills/video-download/scripts/video_dl.py "<用户原话
 | `--info` | 只看信息不下载（标题/作者/时长） |
 | `--out <目录>` | 指定输出目录，默认 `~/Downloads/视频/` |
 | `--quality <n>` | **画面短边**上限，横竖屏通用，默认 1080；设 `0` 不限制（见坑 8） |
+| `--update-ytdlp` | **把自带环境里的 yt-dlp 升到最新版，然后退出**（见坑 16） |
+
+### yt-dlp 从哪来（2026-09-27 改）
+
+查找顺序：`VIDEO_DL_YTDLP` → **skill 自带 venv** → 系统 PATH。
+
+**优先用自带那份**，因为 yt-dlp 是按各站点私有接口写死的，站点一改版就必须跟着升级，
+而系统那份常被包管理器钉死在旧版本上。本机实测 brew 停在 `2025.10.22`，
+比最新版差 340 天，**直接导致 B站报 `HTTP Error 412`、Dailymotion 解析失败** ——
+这两个换 cookie / 换 IP / 改 UA 全都没用，只有升级才好。
+
+自带那份不归任何包管理器管，更新只要一条命令，**不需要 brew、不需要 sudo，
+也不会改掉用户系统上的 yt-dlp**：
+
+```bash
+python3 ~/.workbuddy-ai/skills/video-download/scripts/video_dl.py --update-ytdlp
+```
+
+首次跑通用通道时会自动装上（装不上就回落到系统那份，不会变成「完全不能下载」）。
 
 ## 平台分发规则
 
@@ -155,7 +174,7 @@ GPU process isn't usable. Goodbye.
 | `VIDEO_DL_HOME` | 数据目录，venv 建在其下的 `venv/` |
 | `VIDEO_DL_BOOTSTRAP_PY` | 建 venv 用的基础解释器，默认 `which python3` → `which python` → `sys.executable` |
 | `VIDEO_DL_BROWSER` | 直接指定浏览器可执行文件 |
-| `VIDEO_DL_YTDLP` | 直接指定 yt-dlp 可执行文件（系统那份太旧时用，见坑 10） |
+| `VIDEO_DL_YTDLP` | 直接指定 yt-dlp 可执行文件，**优先级最高**（一般不需要，自带那份已是最新，见坑 16） |
 | `PLAYWRIGHT_BROWSERS_PATH` | Playwright 官方变量，同样被识别 |
 
 浏览器探测顺序：`VIDEO_DL_BROWSER` → Playwright 缓存（`~/Library/Caches/ms-playwright` /
@@ -336,7 +355,8 @@ yt-dlp 是按各站点私有接口写死的，站点一改版就得跟着升级�
 脚本现在会**自动做这件事**：`ytdlp_warn_if_stale()` 在下载前取 `--version`，
 解析出版本里的日期，超过 `_YTDLP_STALE_DAYS`（120 天）就打印告警和升级命令。
 
-逃生通道：系统那份不能/不想升级时，用 `VIDEO_DL_YTDLP` 指向自带的新版：
+逃生通道（**2026-09-27 起已不需要**，自带那份自动就是最新的，见坑 16）：
+系统那份不能/不想升级时，用 `VIDEO_DL_YTDLP` 指向自带的新版：
 
 ```bash
 VIDEO_DL_YTDLP=/path/to/newer/yt-dlp python3 video_dl.py "<链接>"
@@ -527,6 +547,55 @@ else:
 **教训**：`title` 和 `id` 在「有元数据的站点」和「直链」两种情况下语义不同，
 不能指望同一个输出模板两边都好看。
 
+### 16. yt-dlp 自带一份，彻底摆脱包管理器的版本钉死（已改）
+
+**2026-09-27 改。这是坑 10 的根治方案。**
+
+坑 10 记的是「B站 412 其实是 yt-dlp 太旧」，但当时的解法只是**告警 + 让用户自己升级**：
+
+```
+⚠️  yt-dlp 2025.10.22 已 340 天未更新，站点接口变更会直接导致解析失败
+→  升级：brew upgrade yt-dlp  或  pip install -U yt-dlp
+```
+
+问题在于**这条建议我自己执行不了**：`brew upgrade yt-dlp` 要删 `/opt/homebrew` 下
+365 个文件，被沙箱全部拒绝。结果就是告警天天打，问题一直不解决 ——
+B站和 Dailymotion 长期停在「下不了」，而它们其实只是差一个版本。
+
+**改法**：skill 本来就有自己的 venv（`~/.cache/video-download/venv`，抖音通道在用），
+往里面装一份 yt-dlp 即可。`_env.ytdlp_bin()` 的查找顺序改为：
+
+```
+VIDEO_DL_YTDLP  →  venv 自带  →  系统 PATH
+```
+
+为什么这样更好：
+
+| | 系统那份（brew） | 自带这份（venv） |
+|---|---|---|
+| 升级方式 | `brew upgrade`，要管理员权限 | `pip install -U yt-dlp` |
+| 我能自己执行吗 | ❌ 被沙箱拦 | ✅ 可以 |
+| 影响用户系统吗 | 会 | 不会 |
+| 被钉死风险 | 高（包管理器不管） | 无 |
+
+**更新命令**（新增 `--update-ytdlp`，不用记 venv 长路径）：
+
+```bash
+python3 ~/.workbuddy-ai/skills/video-download/scripts/video_dl.py --update-ytdlp
+# → 当前版本：2026.08.19
+# ✅ 已是最新版：2026.08.19
+# → 这个版本只装在 skill 自带环境里，没有动系统上的 yt-dlp
+```
+
+首次跑通用通道时 `ensure_ytdlp()` 会自动装一次；
+**装不上不算致命**——回落到系统那份，不让「装不上新版」升级成「完全不能下载」。
+
+**实测效果**：改完后 B站、Dailymotion **不设任何环境变量即可下载**，
+版本过旧告警也不再出现。这两档从「需要用户手动升级」变成「开箱可用」。
+
+**教训**：一条「请用户自己去做」的建议，如果反复出现却始终没被执行，
+那就该怀疑**这个建议本身设计得不对**——应该改成系统自己能完成的形式。
+
 ## 实测记录
 
 | 平台 | 结果 |
@@ -544,7 +613,9 @@ else:
 | 虎扑直链不带签名 | ❌ 去掉 `?auth_key=...` 后 **403** —— 签名是必需的 |
 | X / Twitter | ✅ `x.com/historyinmemes/status/1790637656616943991` 1.4MB，h264+aac，728×720，15.56s，**免登录免 cookie** |
 | X / Twitter（多视频推文） | ✅ `twitter.com/CTVJLaidlaw/status/1600649710662213632` 同一条推文里的多个视频全部下到，720×1280，113s / 102s |
-| B站 | ✅ `<B站视频ID>` 900.6 MiB，av1 1920×1080 + aac，3851.04s（64 分钟）。**前提是 yt-dlp ≥2026.08.19**，旧版 412，见坑 10 |
+| B站 | ✅ `<B站视频ID>` 900.6 MiB，av1 1920×1080 + aac，3851.04s（64 分钟）。**2026-09-27 起自带 yt-dlp 2026.08.19，无需任何环境变量**，见坑 16 |
+| B站（复测） | ✅ `BV1GJ411x7h7` 真实下载成功（视频 3.97MiB + 音频 5.16MiB 自动合并），**未设任何环境变量** |
+| Dailymotion（复测） | ✅ `x8nj9gm` 3:34，**未设任何环境变量**。⚠️ 但 `x8pp5wt` 报 `Not found` —— 那是链接本身失效，不是版本问题，别误判 |
 | 小红书 | ✅ `<视频标题>` 2.62 MiB，h264 720×1280 + aac，11.12s。**必须用带 `xsec_token` 的真实分享链接**，见「已知限制」 |
 | 跨平台改造回归 | ✅ 抖音 `f6e7f6a5…db7243d` / YouTube `Me at the zoo`，SHA256 与改造前逐位一致 |
 
@@ -562,6 +633,7 @@ Windows `Scripts/python.exe` 布局识别。
 2. **下面的结论依赖 yt-dlp 版本。** 第一轮实测用的是旧版 `2025.10.22`，
    后来发现 B站 的「412 反爬」其实是版本旧（见坑 10），于是**用 `2026.08.19` 全量重测**，
    有 3 个站点直接翻转。**换 yt-dlp 版本后，本表的"不可下"必须重测。**
+   （**2026-09-27 起 skill 自带 yt-dlp 2026.08.19，下表的"仅新版"已自动满足**，见坑 16。）
 
 **yt-dlp 实测可下**（真实下载 + ffprobe 校验）：
 
@@ -732,7 +804,9 @@ B站、Reddit、Instagram、Dailymotion 四个都栽在这上面。
 | 虎扑帖子页报「没在输入里找到可识别的视频链接」 | 2026-09-27 前的旧版会这样，`hupu.com` 已加入 `GENERIC_RE` |
 | 虎扑 CDN 直链 403 | 签名缺失或过期。链接必须**连 `?auth_key=...` 一起复制**；用 `date -r <时间戳>` 查是否过期 |
 | 白名单站点里混进了图片/JS 链接被当视频下 | 已加 `_ASSET_RE` 过滤静态资源后缀。**`.html` 不能加进去**（帖子页正是 `.html`） |
-| B站 `412 Precondition Failed` | 同上；换 cookie / 换 IP / 改 UA 都无效，升级 yt-dlp 才好。临时可用 `VIDEO_DL_YTDLP` 指向新版 |
+| B站 `412 Precondition Failed` | 换 cookie / 换 IP / 改 UA 都无效，是 **yt-dlp 版本旧**。2026-09-27 起自带环境已是最新，正常不会遇到；若又出现就跑 `--update-ytdlp`（见坑 16） |
+| 想更新 yt-dlp | `python3 <scripts>/video_dl.py --update-ytdlp`。只更新 skill 自带环境，不动系统那份，不需要 brew/sudo |
+| 某些站点（B站/Dailymotion）突然解析失败 | 先跑 `--update-ytdlp`。**这是升级后最该做的第一件事**，比换 cookie / 换 IP 都有效 |
 | 输出里报错跑到横幅前面 | 已修行缓冲（见坑 11）；若又出现说明 `main()` 的 `reconfigure` 被删了 |
 | 弹「允许访问 login.keychain-db」 | **已改为默认拒绝，不再弹窗**；若又出现说明 settings.json 规则被重置（见坑 7） |
 | 找不到 Playwright 浏览器 | `npx playwright install chromium`，或用 `VIDEO_DL_BROWSER=/path/to/chrome` 直接指定 |

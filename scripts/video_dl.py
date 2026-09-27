@@ -67,6 +67,40 @@ def ensure_env():
         sys.exit(1)
 
 
+def ensure_ytdlp():
+    """确保自带 venv 里有 yt-dlp —— 这样升级不依赖 brew / sudo。
+
+    为什么要自带一份：系统那份常被包管理器钉死在旧版本上。
+    本机实测 brew 停在 `2025.10.22`，比最新版差 340 天，
+    直接导致 B站报 `HTTP Error 412`、Dailymotion 解析失败 ——
+    而这两个换 cookie / 换 IP / 改 UA 全都没用，只有升级才好。
+    venv 里这份自己管，`pip install -U yt-dlp` 就能更新，
+    既不动用户系统上的 yt-dlp，也不需要管理员权限。
+
+    装不上不算致命：`_env.ytdlp_bin()` 会回落到系统那份，
+    不让「装不上新版」升级成「完全不能下载」。
+    """
+    if _env.venv_ytdlp():
+        return
+    pip = os.path.join(os.path.dirname(VENV_PY), "pip")
+    if os.name == "nt":
+        pip += ".exe"
+    try:
+        if not os.path.isfile(pip):
+            subprocess.run([BOOTSTRAP_PY, "-m", "venv", VENV_DIR],
+                           check=True, capture_output=True, timeout=180)
+        info("首次使用通用通道，正在自带环境里安装 yt-dlp…")
+        subprocess.run([pip, "install", "-q", "yt-dlp"],
+                       check=True, capture_output=True, timeout=300)
+        got = _env.venv_ytdlp()
+        if got:
+            ver = subprocess.run([got, "--version"], capture_output=True,
+                                 text=True, timeout=30).stdout.strip()
+            ok(f"yt-dlp {ver} 已就绪（自带环境，升级不依赖 brew）")
+    except Exception as e:
+        warn(f"自带环境装 yt-dlp 失败（{type(e).__name__}），回落到系统那份")
+
+
 # ─────────────────────── 链接识别与提取 ───────────────────────
 
 DOUYIN_RE = re.compile(
@@ -331,6 +365,7 @@ def run_ytdlp(urls, out_dir, quality, only_info):
     print("=" * 62)
     print()
     os.makedirs(out_dir, exist_ok=True)
+    ensure_ytdlp()
     ytdlp_warn_if_stale()
 
     # 沙箱里 ~/Downloads 这类目录"能新建、不能改名/删除"，
@@ -391,6 +426,42 @@ def run_ytdlp(urls, out_dir, quality, only_info):
     return rc_all
 
 
+def update_ytdlp():
+    """把自带 venv 里的 yt-dlp 升到最新版，并打印前后版本。"""
+    pip = os.path.join(os.path.dirname(VENV_PY), "pip")
+    if os.name == "nt":
+        pip += ".exe"
+    try:
+        if not os.path.isfile(pip):
+            info("自带环境不存在，正在创建…")
+            subprocess.run([BOOTSTRAP_PY, "-m", "venv", VENV_DIR],
+                           check=True, capture_output=True, timeout=180)
+        before = ""
+        got = _env.venv_ytdlp()
+        if got:
+            before = subprocess.run([got, "--version"], capture_output=True,
+                                    text=True, timeout=30).stdout.strip()
+        info(f"当前版本：{before or '（未安装）'}")
+        print()
+        rc = subprocess.call([pip, "install", "-U", "yt-dlp"])
+        if rc != 0:
+            bad("更新失败（检查网络或代理）")
+            return 1
+        after = subprocess.run([_env.venv_ytdlp(), "--version"],
+                               capture_output=True, text=True,
+                               timeout=30).stdout.strip()
+        print()
+        if before and before == after:
+            ok(f"已是最新版：{after}")
+        else:
+            ok(f"已更新：{before or '(无)'} → {after}")
+        info("这个版本只装在 skill 自带环境里，没有动系统上的 yt-dlp")
+        return 0
+    except Exception as e:
+        bad(f"更新失败：{type(e).__name__}: {e}")
+        return 1
+
+
 def main():
     # 父进程的 print 在管道下是块缓冲，而 yt-dlp 子进程直接写 fd。
     # 不改成行缓冲的话，子进程的报错会跑到横幅前面去，看着像「一开始就炸了」，
@@ -401,12 +472,24 @@ def main():
         pass
 
     ap = argparse.ArgumentParser(description="统一视频下载入口")
-    ap.add_argument("input", nargs="+", help="视频链接或分享文本")
+    ap.add_argument("input", nargs="*", help="视频链接或分享文本")
     ap.add_argument("--info", action="store_true", help="只看信息不下载")
     ap.add_argument("--out", default=None, help="输出目录，默认 ~/Downloads/视频")
     ap.add_argument("--quality", type=int, default=1080,
                     help="画面短边上限，横竖屏通用（默认 1080；设 0 表示不限制）")
+    ap.add_argument("--update-ytdlp", action="store_true",
+                    help="把自带环境里的 yt-dlp 升到最新版，然后退出")
     args = ap.parse_args()
+
+    if args.update_ytdlp:
+        print()
+        sys.exit(update_ytdlp())
+
+    if not args.input:
+        bad("没给链接")
+        info("用法：python3 video_dl.py \"<链接或分享文本>\"")
+        info("更新 yt-dlp：python3 video_dl.py --update-ytdlp")
+        sys.exit(1)
 
     douyin, generic = extract_urls(args.input)
     if not douyin and not generic:

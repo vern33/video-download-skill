@@ -57,17 +57,34 @@ def bootstrap_python():
     return shutil.which("python3") or shutil.which("python") or sys.executable
 
 
+def venv_ytdlp():
+    """venv 里自带的 yt-dlp；没装返回 None。"""
+    d = venv_dir()
+    for rel in (("bin", "yt-dlp"), ("Scripts", "yt-dlp.exe")):
+        p = os.path.join(d, *rel)
+        if os.path.isfile(p):
+            return p
+    return None
+
+
 def ytdlp_bin():
     """yt-dlp 可执行文件；找不到返回 None。
 
+    查找顺序：显式指定 → **venv 自带** → 系统 PATH。
+
     yt-dlp 是按各站点私有接口写死的，站点一改版就必须跟着升级
-    （B站 HTTP 412 就是版本过旧导致的）。系统那份往往被包管理器
-    钉在旧版本上，所以留一个 VIDEO_DL_YTDLP 指向自带的新版。
+    （B站 `HTTP Error 412` 就是版本过旧导致的，换 cookie/换 IP/改 UA 全无效）。
+    而系统那份常被包管理器钉在旧版本上：实测本机 brew 停在 2025.10.22，
+    比最新版差了 340 天，直接导致 B站和 Dailymotion 下不了。
+
+    所以**优先用 venv 里自己装的那份**——它不归任何包管理器管，
+    `pip install -U yt-dlp` 就能更新，不需要 sudo / brew，
+    也不会把用户系统上的 yt-dlp 改掉。skill 首次跑时会自动装上（见 video_dl.py）。
     """
     explicit = os.environ.get("VIDEO_DL_YTDLP")
     if explicit:
         return os.path.expanduser(explicit)
-    return shutil.which("yt-dlp")
+    return venv_ytdlp() or shutil.which("yt-dlp")
 
 
 def playwright_bases():
