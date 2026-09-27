@@ -1,6 +1,6 @@
 ---
 name: video-download
-description: 下载网络视频到本地。当用户发来视频链接或分享文本，或说「下载这个视频」「把这个视频存下来」「存一下」「帮我下载」时使用。支持抖音（v.douyin.com 短链、douyin.com/video/数字ID）、YouTube（youtube.com/watch、youtu.be）、B站（bilibili.com、b23.tv）、腾讯视频（v.qq.com）、小红书（xiaohongshu.com、xhslink.com）、X/Twitter、Vimeo、Dailymotion 等数千个站点，**以及任意域名的直链媒体文件**（以 .mp4/.m3u8/.mov/.ts/.mp3 等结尾的 URL，含带 `auth_key` 签名的 CDN 直链，如虎扑 `v.hoopchina.com.cn/...mp4?auth_key=...`）。按平台自动分发：抖音走浏览器内请求方案（启动 Playwright Chromium + --no-sandbox，在页面上下文 fetch 详情接口通过 Argus 风控），其余站点走 yt-dlp。输入可以直接是带噪音的分享文本（如「2.56 复制打开抖音，看看【xxx的作品】… :6pm 12/25 pQK:/ P@k.Px」或「看看这个 https://... 帮我下一下」），脚本会自己提取链接。支持一次传多条、混合平台链接，会分通道处理。产物默认落在 ~/Downloads/视频/。
+description: 下载网络视频到本地。当用户发来视频链接或分享文本，或说「下载这个视频」「把这个视频存下来」「存一下」「帮我下载」时使用。支持抖音（v.douyin.com 短链、douyin.com/video/数字ID）、YouTube（youtube.com/watch、youtu.be）、B站（bilibili.com、b23.tv）、腾讯视频（v.qq.com）、小红书（xiaohongshu.com、xhslink.com）、X/Twitter、Vimeo、Dailymotion 等数千个站点，**以及任意域名的直链媒体文件**（以 .mp4/.m3u8/.mov/.ts/.mp3 等结尾的 URL，含带 `auth_key` 签名的 CDN 直链，如虎扑 `v.hoopchina.com.cn/...mp4?auth_key=...`）。按平台自动分发：抖音走浏览器内请求方案（启动 Playwright Chromium + --no-sandbox，在页面上下文 fetch 详情接口，以通过抖音 Argus 风控校验），其余站点走 yt-dlp。输入可以直接是带噪音的分享文本（如「2.56 复制打开抖音，看看【xxx的作品】… :6pm 12/25 pQK:/ P@k.Px」或「看看这个 https://... 帮我下一下」），脚本会自己提取链接。支持一次传多条、混合平台链接，会分通道处理。产物默认落在 ~/Downloads/视频/。
 agent_created: true
 ---
 
@@ -368,7 +368,7 @@ VIDEO_DL_YTDLP=/path/to/newer/yt-dlp python3 video_dl.py "<链接>"
 python3 -m venv /tmp/ytdlp-new && /tmp/ytdlp-new/bin/pip install -U yt-dlp
 ```
 
-**同一条视频实测对比**（`<B站视频ID>`，64 分钟）：
+**同一条视频实测对比**（B站 64 分钟长视频）：
 
 | yt-dlp | 结果 |
 |---|---|
@@ -467,7 +467,7 @@ yt-dlp 的 **vqq 提取器不解析标题和时长**，`title` 是它内部兜�
 有元数据的站点顺带变好读了（`3851.04秒` → `1:04:11`）：
 
 ```
-✅ <视频标题> | 时长 1:04:11 | <UP主>
+✅ <视频标题> | 时长 1:04:11 | <作者>
 ```
 
 **教训（比代码更重要）**：`NA` / `null` / 空占位符是**元数据问题**，
@@ -609,14 +609,14 @@ python3 ~/.workbuddy-ai/skills/video-download/scripts/video_dl.py --update-ytdlp
 | 腾讯视频（专辑页） | ❌ `/x/cover/<cid>.html` 走 `vqq:series`，提取器已失效，**退出码 0 但输出为空**（见坑 14） |
 | 腾讯视频（专辑内分集） | ⚠️ 取决于该集本身：实测某集返回 `Tencent said: 这个视频被外星人劫走，暂时看不了了~` |
 | 直链媒体（虎扑 CDN） | ✅ `v.hoopchina.com.cn/..._wz_transcode.mp4?auth_key=...` 27,284,140 B，h264 960×720 + aac，156.8s。**本地字节数与服务端 `content-length` 完全一致** |
-| 虎扑帖子页 | ✅ `bbs.hupu.com/<帖子ID>.html` → `<帖子标题>-步行街主干道-虎扑社区 (1) [<帖子ID>-1].mp4` 10,106,001 B，h264 1280×720 + aac，173.28s。**字节数与 HEAD 探测一致**；帖子内仅 1 个视频 |
+| 虎扑帖子页 | ✅ `bbs.hupu.com/<帖子ID>.html` → 落盘文件名形如 `<帖子标题>-步行街主干道-虎扑社区 (1) [<帖子ID>-1].mp4`，10,106,001 B，h264 1280×720 + aac，173.28s。**字节数与 HEAD 探测一致**；帖子内仅 1 个视频 |
 | 虎扑直链不带签名 | ❌ 去掉 `?auth_key=...` 后 **403** —— 签名是必需的 |
 | X / Twitter | ✅ `x.com/historyinmemes/status/1790637656616943991` 1.4MB，h264+aac，728×720，15.56s，**免登录免 cookie** |
 | X / Twitter（多视频推文） | ✅ `twitter.com/CTVJLaidlaw/status/1600649710662213632` 同一条推文里的多个视频全部下到，720×1280，113s / 102s |
-| B站 | ✅ `<B站视频ID>` 900.6 MiB，av1 1920×1080 + aac，3851.04s（64 分钟）。**2026-09-27 起自带 yt-dlp 2026.08.19，无需任何环境变量**，见坑 16 |
+| B站 | ✅ 900.6 MiB，av1 1920×1080 + aac，3851.04s（64 分钟）。**2026-09-27 起自带 yt-dlp 2026.08.19，无需任何环境变量**，见坑 16 |
 | B站（复测） | ✅ `BV1GJ411x7h7` 真实下载成功（视频 3.97MiB + 音频 5.16MiB 自动合并），**未设任何环境变量** |
 | Dailymotion（复测） | ✅ `x8nj9gm` 3:34，**未设任何环境变量**。⚠️ 但 `x8pp5wt` 报 `Not found` —— 那是链接本身失效，不是版本问题，别误判 |
-| 小红书 | ✅ `<视频标题>` 2.62 MiB，h264 720×1280 + aac，11.12s。**必须用带 `xsec_token` 的真实分享链接**，见「已知限制」 |
+| 小红书 | ✅ 2.62 MiB，h264 720×1280 + aac，11.12s。**必须用带 `xsec_token` 的真实分享链接**，见「已知限制」 |
 | 跨平台改造回归 | ✅ 抖音 `f6e7f6a5…db7243d` / YouTube `Me at the zoo`，SHA256 与改造前逐位一致 |
 
 跨平台改造的验证方式：删掉旧 venv 后从零跑抖音通道，确认
@@ -774,7 +774,7 @@ B站、Reddit、Instagram、Dailymotion 四个都栽在这上面。
 |---|---|---|---|---|
 | 1 | **手机端「保存到相册」** | 原画质、无水印 | 无 | **首选**。视频号全屏播放 → 右下角「···」/分享 → 看有没有「保存到相册」。**视频号默认关闭下载权限，只有创作者手动开启才有这一项**；关了就完全没有。存完 AirDrop 到 Mac |
 | 2 | **录屏** | 有损、带界面水印 | 无 | **100% 可用，兜底方案**。Mac：`Cmd+Shift+5` 选区域录制（或 QuickTime），播完停止再裁头尾 |
-| 3 | **MITM 抓包**（res-downloader / mitmproxy） | 原画质 | ⚠️ **需装根证书** | 进阶。原理：WeChatAppEx 是 Chromium 内核，走 macOS 系统信任库，装 CA 后可解密。**必须先向用户说明装根证书的风险并取得同意**，不要擅自做 |
+| 3 | **MITM 抓包**（res-downloader / mitmproxy） | 原画质 | ⚠️ **需装根证书** | 进阶。原理：WeChatAppEx 是 Chromium 内核，走 macOS 系统信任库，装 CA 后可解密。**装根证书会削弱整机 TLS 信任链，必须先向用户说明风险并取得明确同意，不要擅自做**；且**仅限用户本人账号、本人发布或有权访问的内容** |
 | 4 | **跨平台找同一条** | 原画质 | 无 | 创作者常同步发抖音/小红书/B站。**这几家本 Skill 能直接下**，知道账号名就去搜 |
 | 5 | ~~第三方「下载助手」小程序/机器人~~ | — | ⚠️ 高 | **不推荐**：要把视频转发给陌生账号（等于交出内容），且多数收费、解析常失效 |
 
