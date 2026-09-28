@@ -617,6 +617,7 @@ python3 ~/.workbuddy-ai/skills/video-download/scripts/video_dl.py --update-ytdlp
 | B站（复测） | ✅ `BV1GJ411x7h7` 真实下载成功（视频 3.97MiB + 音频 5.16MiB 自动合并），**未设任何环境变量** |
 | Dailymotion（复测） | ✅ `x8nj9gm` 3:34，**未设任何环境变量**。⚠️ 但 `x8pp5wt` 报 `Not found` —— 那是链接本身失效，不是版本问题，别误判 |
 | 小红书 | ✅ 2.62 MiB，h264 720×1280 + aac，11.12s。**必须用带 `xsec_token` 的真实分享链接**，见「已知限制」 |
+| 小红书（PC 链接） | ✅ `xiaohongshu.com/explore/<笔记ID>?xsec_token=...&xsec_source=pc_feed` 64.91 MiB，h264 **720×1518** + aac，440.5s（7:20）。**PC 网页版链接即可，不需要 App**。竖屏长边 1518 > 1080，是坑 8（`res` vs `height`）的极端案例：旧写法会把它整个排除后静默降级 |
 | 跨平台改造回归 | ✅ 抖音 `f6e7f6a5…db7243d` / YouTube `Me at the zoo`，SHA256 与改造前逐位一致 |
 
 跨平台改造的验证方式：删掉旧 venv 后从零跑抖音通道，确认
@@ -707,8 +708,11 @@ B站、Reddit、Instagram、Dailymotion 四个都栽在这上面。
   之前判它「提取器失效」是**错的**，错了两次：
   1. 拿 yt-dlp `_TESTS` 里的裸链接测 → 没有 `xsec_token` → `No video formats found`
   2. 用真实链接测 → 报 `HTTP Error 403`，但那**是沙箱代理造成的**，不是站点
-  正确姿势：从 App「分享 → 复制链接」拿到的完整 URL（含 `xsec_token=...`）直接贴进来即可，
-  脚本无需任何额外参数。实测 `2.62MiB / h264 720×1280 / 11.12s`。
+  正确姿势：拿到**带 `xsec_token=...` 的完整 URL** 直接贴进来即可，脚本无需任何额外参数。
+  **来源不限 App**：PC 网页版的链接（`xsec_source=pc_feed`）同样可用，
+  实测 2026-09-28 直接贴 `xiaohongshu.com/explore/<笔记ID>?xsec_token=...&xsec_source=pc_feed`
+  一次成功（64.91 MiB / h264 720×1518 / 440.5s），无需 App。
+  **判断标准只有一条：URL 里有没有 `xsec_token`。** 有就能下，没有就报 `No video formats found`。
 - **优酷必须带 `Referer`**：不带报 `HTTP Error 403: Forbidden`，且报错发生在
   **解析成功之后的下载阶段**，极易误判成「站点不支持」。加
   `--referer "https://v.youku.com/"` 即可（脚本目前没加，所以即使放开白名单也下不了）。
