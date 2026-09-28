@@ -1,6 +1,6 @@
 ---
 name: video-download
-description: 下载网络视频到本地。当用户发来视频链接或分享文本，或说「下载这个视频」「把这个视频存下来」「存一下」「帮我下载」时使用。支持抖音（v.douyin.com 短链、douyin.com/video/数字ID）、YouTube（youtube.com/watch、youtu.be）、B站（bilibili.com、b23.tv）、腾讯视频（v.qq.com）、小红书（xiaohongshu.com、xhslink.com）、X/Twitter、Vimeo、Dailymotion 等数千个站点，**以及任意域名的直链媒体文件**（以 .mp4/.m3u8/.mov/.ts/.mp3 等结尾的 URL，含带 `auth_key` 签名的 CDN 直链，如虎扑 `v.hoopchina.com.cn/...mp4?auth_key=...`）。按平台自动分发：抖音走浏览器内请求方案（启动 Playwright Chromium + --no-sandbox，在页面上下文 fetch 详情接口，以通过抖音 Argus 风控校验），其余站点走 yt-dlp。输入可以直接是带噪音的分享文本（如「2.56 复制打开抖音，看看【xxx的作品】… :6pm 12/25 pQK:/ P@k.Px」或「看看这个 https://... 帮我下一下」），脚本会自己提取链接。支持一次传多条、混合平台链接，会分通道处理。产物默认落在 ~/Downloads/视频/。
+description: 下载网络视频到本地。当用户发来视频链接或分享文本，或说「下载这个视频」「把这个视频存下来」「存一下」「帮我下载」时使用。支持抖音（v.douyin.com 短链、douyin.com/video/数字ID）、YouTube（youtube.com/watch、youtu.be）、B站（bilibili.com、b23.tv）、腾讯视频（v.qq.com）、小红书（xiaohongshu.com、xhslink.com）、X/Twitter、Vimeo、Dailymotion、微博、优酷、Niconico、SoundCloud、TikTok、Twitch、Reddit、Instagram、知乎视频、芒果TV 等数千个站点，**以及任意域名的直链媒体文件**（以 .mp4/.m3u8/.mov/.ts/.mp3 等结尾的 URL，含带 `auth_key` 签名的 CDN 直链，如虎扑 `v.hoopchina.com.cn/...mp4?auth_key=...`）。按平台自动分发：抖音走浏览器内请求方案（启动 Playwright Chromium + --no-sandbox，在页面上下文 fetch 详情接口，以通过抖音 Argus 风控校验），其余站点走 yt-dlp。输入可以直接是带噪音的分享文本（如「2.56 复制打开抖音，看看【xxx的作品】… :6pm 12/25 pQK:/ P@k.Px」或「看看这个 https://... 帮我下一下」），脚本会自己提取链接。支持一次传多条、混合平台链接，会分通道处理。产物默认落在 ~/Downloads/视频/。
 agent_created: true
 ---
 
@@ -631,6 +631,8 @@ Windows `Scripts/python.exe` 布局识别。
 
 1. **白名单是一道硬闸。** 很多站点 yt-dlp 明明能下，但**脚本会直接拒绝**
    （`GENERIC_RE` 没命中），要下得绕过脚本直接调 `yt-dlp`。详见「已知限制」。
+   **2026-09-28 已把这轮实测出的 10 个站点补进白名单**（见「白名单补配」），
+   所以下表里的站点现在**直接贴链接就能下**，不用再手动调 yt-dlp。
 2. **下面的结论依赖 yt-dlp 版本。** 第一轮实测用的是旧版 `2025.10.22`，
    后来发现 B站 的「412 反爬」其实是版本旧（见坑 10），于是**用 `2026.08.19` 全量重测**，
    有 3 个站点直接翻转。**换 yt-dlp 版本后，本表的"不可下"必须重测。**
@@ -641,7 +643,7 @@ Windows `Scripts/python.exe` 布局识别。
 | 站点 | 大小 | 时长 | 视频 | 版本 |
 |---|---|---|---|---|
 | 微博 | 63.97MB | 918.7s | h264 1280×720 | 旧版即通过 |
-| 优酷 | 50.32MB | 702.1s | h264 640×360 ⚠️ **需 `Referer: https://v.youku.com/`** | 旧版即通过 |
+| 优酷 | 50.32MB | 702.1s | h264 640×360。**不需要 `--referer`**（2026-09-28 复测纠正，见「已知限制」） | 旧版即通过 |
 | Niconico | 10.94MB | 219.1s | h264 480×360 | 旧版即通过 |
 | SoundCloud | 7.64MB | 397.2s | 纯音频 aac | 旧版即通过 |
 | TikTok | 2.62MB | 27.5s | h264 540×960 | 旧版即通过 |
@@ -677,16 +679,47 @@ B站、Reddit、Instagram、Dailymotion 四个都栽在这上面。
 
 ## 已知限制
 
-- **⚠️ 白名单是硬闸（最容易踩的一条）**：`GENERIC_RE` 只放行 14 类链接形态
-  （YouTube / B站 / 腾讯视频 / 小红书 / X-Twitter / Vimeo / Dailymotion / t.co / 虎扑），
+- **⚠️ 白名单是硬闸（最容易踩的一条）**：`GENERIC_RE` 决定哪些链接会被识别，
   外加下面的**直链媒体**规则。
   **白名单外的链接会在联网前就被拒**，报「没在输入里找到可识别的视频链接」——
-  即使 yt-dlp 明明能下。已实测被拒的：微博、优酷、Niconico、TikTok、Twitch、
-  SoundCloud、Reddit、Instagram、知乎视频、芒果TV、西瓜视频、爱奇艺、快手、Facebook。
-  yt-dlp 有 1752 个提取器，脚本只放行 14 类。
-  这是**故意的设计**（避免把聊天文本里的普通网址误判成视频），代价是覆盖面窄。
+  即使 yt-dlp 明明能下。这是**故意的设计**（避免把聊天文本里的普通网址误判成视频），
+  代价是覆盖面窄。yt-dlp 有 1752 个提取器，白名单只放行其中一小部分。
   绕过办法：直接 `yt-dlp "<链接>"`，或把域名加进 `GENERIC_RE`。
   **遇到用户反复发的站点，就该把它加进白名单**（虎扑就是这么加进来的）。
+
+#### 白名单补配（2026-09-28）
+
+**问题**：一批站点已经实测可下，却**没被放行** —— 用户直接贴链接会被拒，
+只有手动调 yt-dlp 才下得了。这是「实测过但忘了补白名单」的漏配。
+
+已补进 `GENERIC_RE`（共 10 个站点）：
+
+| 站点 | 放行的链接形态 |
+|---|---|
+| 微博 | `weibo.com/tv/show/...`、`m.weibo.cn/{detail,status}/...`、`weibo.com/<uid>/<bid>` |
+| 优酷 | `{v.,www.}youku.com/v_show/...` |
+| Niconico | `nicovideo.jp/watch/...`、`nico.ms/<id>` |
+| SoundCloud | `soundcloud.com/...`、`snd.sc/<id>` |
+| TikTok | `tiktok.com/...`、`{vm,vt}.tiktok.com/<id>` |
+| Twitch | `twitch.tv/videos/<数字>`、`twitch.tv/<频道>/clip/...`、`clips.twitch.tv/<slug>` |
+| Reddit | `reddit.com/r/...`、`redd.it/<id>`、`v.redd.it/<id>` |
+| Instagram | `instagram.com/{p,reel,tv}/...`、`instagr.am/{p,reel,tv}/...` |
+| 知乎视频 | `zhihu.com/{zvideo,video}/<数字>` |
+| 芒果TV | `mgtv.com/{b,h}/...` |
+
+**微博 / 知乎 / Instagram / Twitch 只放视频相关路径**，不放裸域名 ——
+`instagram.com/<用户名>/`、`zhihu.com/question/<id>`、`twitch.tv/<频道>` 这类
+普通主页 / 正文页**故意不匹配**，避免把非视频页面误判成视频。
+
+**验证方式（两层）**：
+
+1. **正则层**：27 条断言（18 条应命中 + 5 条不应命中 + 4 条 Referer 判定），全过。
+2. **端到端**：用技能脚本真实下载两个新加站点，全部成功并 ffprobe 校验：
+
+   | 链接 | 产物 | 校验 |
+   |---|---|---|
+   | `v.youku.com/v_show/id_XNTE1MzczOTg4MA==.html` | 26,525,352 B | h264 640×360 + aac，362.97s |
+   | `reddit.com/r/dumbfuckers_club/comments/zjjw82/cringe/` | 1,867,579 B | h264 360×360 + aac，16.06s |
 - **白名单内的站点也可能下不了**：白名单只保证「不会被提前拒掉」，不保证能下。
 - **⚠️ 腾讯视频：能不能下取决于「链接形态」，不是站点**（2026-09-27 补充实测）。
   同一个 `v.qq.com` 域名下有四种链接，行为完全不同：
@@ -713,9 +746,15 @@ B站、Reddit、Instagram、Dailymotion 四个都栽在这上面。
   实测 2026-09-28 直接贴 `xiaohongshu.com/explore/<笔记ID>?xsec_token=...&xsec_source=pc_feed`
   一次成功（64.91 MiB / h264 720×1518 / 440.5s），无需 App。
   **判断标准只有一条：URL 里有没有 `xsec_token`。** 有就能下，没有就报 `No video formats found`。
-- **优酷必须带 `Referer`**：不带报 `HTTP Error 403: Forbidden`，且报错发生在
-  **解析成功之后的下载阶段**，极易误判成「站点不支持」。加
-  `--referer "https://v.youku.com/"` 即可（脚本目前没加，所以即使放开白名单也下不了）。
+- **~~优酷必须带 `Referer`~~ —— 该结论已于 2026-09-28 纠正：现在不需要任何额外参数。**
+  当天用同一条链接做对照实验，带 / 不带 `--referer "https://v.youku.com/"` 各真实下载一次，
+  产物**逐位一致**（182,316,336 B，SHA256 `93b1b16a…7947`）。
+  根因：**yt-dlp 的 youku 提取器自己就带 Referer** ——
+  `extractor/youku.py` 里写死了 `'Referer': url`，外部再传是多余的。
+  **教训**：原先记的「下载阶段 403，必须带 Referer」很可能是**沙箱代理**造成的
+  （与小红书那个 403 同源，见坑 8），被误归因到 Referer 上。
+  **下载阶段吃 403 时，先按代理问题排查（`--proxy ""` 对照），
+  不要急着给站点找特供参数。**
 - **抖音 IP 限流**：短时间反复请求吃 `HTTP 403`。脚本内置 3 次重试 + 4 秒退避。
 - **抖音 headless 检测**：可能被识别。脚本有兜底——从页面 `<video>` 标签取直链。
 - **抖音图文作品**：没有 mp4 直链，会报「没找到 mp4 直链」，这是正常情况。
@@ -807,6 +846,9 @@ B站、Reddit、Instagram、Dailymotion 四个都栽在这上面。
 | 直链下载后文件名是 `xxx [xxx].mp4` | 已修（见坑 15）。若又出现说明 `run_ytdlp()` 里按 `MEDIA_URL_RE.fullmatch` 选模板的分支被删了 |
 | 虎扑帖子页报「没在输入里找到可识别的视频链接」 | 2026-09-27 前的旧版会这样，`hupu.com` 已加入 `GENERIC_RE` |
 | 虎扑 CDN 直链 403 | 签名缺失或过期。链接必须**连 `?auth_key=...` 一起复制**；用 `date -r <时间戳>` 查是否过期 |
+| 微博 / 优酷 / TikTok / Twitch / Reddit / Instagram / 知乎视频 / 芒果TV / Niconico / SoundCloud 报「没在输入里找到可识别的视频链接」 | 2026-09-28 前的旧版会这样。这 10 个站点已补进 `GENERIC_RE`，见「白名单补配」 |
+| 优酷下载报 403，加 `Referer` 之后就好了 | **大概率是巧合**。yt-dlp 的 youku 提取器自己就带 `'Referer': url`，外部 `--referer` 是多余的。真因更可能是**沙箱代理**（见坑 8）—— 用 `--proxy ""` 对照验证，别急着认定是 Referer |
+| 某站点实测能下，但脚本拒收链接 | 白名单漏配。把域名 / 路径加进 `GENERIC_RE` 并补一条断言（见「白名单补配」的做法） |
 | 白名单站点里混进了图片/JS 链接被当视频下 | 已加 `_ASSET_RE` 过滤静态资源后缀。**`.html` 不能加进去**（帖子页正是 `.html`） |
 | B站 `412 Precondition Failed` | 换 cookie / 换 IP / 改 UA 都无效，是 **yt-dlp 版本旧**。2026-09-27 起自带环境已是最新，正常不会遇到；若又出现就跑 `--update-ytdlp`（见坑 16） |
 | 想更新 yt-dlp | `python3 <scripts>/video_dl.py --update-ytdlp`。只更新 skill 自带环境，不动系统那份，不需要 brew/sudo |

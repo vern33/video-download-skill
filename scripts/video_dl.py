@@ -129,7 +129,36 @@ GENERIC_RE = re.compile(
     r"(?:www\.)?(?:fxtwitter|vxtwitter|fixupx|twittpr)\.com/[^\s\u4e00-\u9fff]+|"
     r"t\.co/[A-Za-z0-9]+|"
     r"(?:www\.)?vimeo\.com/\d+|"
-    r"(?:www\.)?dailymotion\.com/video/[^\s\u4e00-\u9fff]+"
+    r"(?:www\.)?dailymotion\.com/video/[^\s\u4e00-\u9fff]+|"
+    # ── 以下站点已实测可下，但原先不在白名单里 ──
+    # 结果是：用户直接贴链接会被「没在输入里找到可识别的视频链接」拒掉，
+    # 只有手动调 yt-dlp 才下得了。这类「实测能下却没放行」是白名单的漏配。
+    #
+    # 微博 / 知乎 / Instagram / Twitch 只放**视频相关路径**，
+    # 避免把普通正文页、个人主页误判成视频。
+    r"(?:www\.|m\.)?weibo\.(?:com|cn)/tv/show/[^\s\u4e00-\u9fff]+|"
+    r"m\.weibo\.cn/(?:detail|status)/[^\s\u4e00-\u9fff]+|"
+    r"(?:www\.)?weibo\.com/\d+/[A-Za-z0-9]+|"
+    # 优酷：yt-dlp 的 youku 提取器**自己**会带 `Referer`（youku.py 里 `'Referer': url`），
+    # 不需要额外传 `--referer`。2026-09-28 复测：带与不带产出逐位一致
+    # （182,316,336 B，SHA256 93b1b16a…7947），此前记的「必须带 Referer」已过期。
+    r"(?:v\.|www\.)?youku\.com/v_show/[^\s\u4e00-\u9fff]+|"
+    r"(?:www\.)?nicovideo\.jp/watch/[^\s\u4e00-\u9fff]+|"
+    r"nico\.ms/[A-Za-z0-9]+|"
+    r"(?:www\.|m\.)?soundcloud\.com/[^\s\u4e00-\u9fff]+|"
+    r"snd\.sc/[A-Za-z0-9]+|"
+    r"(?:www\.|m\.)?tiktok\.com/[^\s\u4e00-\u9fff]+|"
+    r"(?:vm|vt)\.tiktok\.com/[A-Za-z0-9]+|"
+    r"(?:www\.)?twitch\.tv/videos/\d+|"
+    r"(?:www\.)?twitch\.tv/[^\s\u4e00-\u9fff/]+/clip/[^\s\u4e00-\u9fff]+|"
+    r"clips\.twitch\.tv/[A-Za-z0-9_\-]+|"
+    r"(?:www\.|old\.|m\.|np\.)?reddit\.com/r/[^\s\u4e00-\u9fff]+|"
+    r"redd\.it/[A-Za-z0-9]+|"
+    r"v\.redd\.it/[A-Za-z0-9]+|"
+    r"(?:www\.)?instagram\.com/(?:p|reels?|tv)/[^\s\u4e00-\u9fff]+|"
+    r"instagr\.am/(?:p|reels?|tv)/[^\s\u4e00-\u9fff]+|"
+    r"(?:www\.)?zhihu\.com/(?:zvideo|video)/\d+|"
+    r"(?:www\.)?mgtv\.com/(?:b|h)/[^\s\u4e00-\u9fff]+"
     r")")
 
 # 直链媒体文件：路径以已知音视频扩展名结尾。
