@@ -388,7 +388,73 @@ def _info_one(base, url):
     return 0
 
 
-def run_ytdlp(urls, out_dir, quality, only_info):
+# 编码偏好（`--codec`）。
+#
+# yt-dlp 在同分辨率下默认挑**体积最小**的那档，而压缩效率是 AV1 > H.265 > H.264，
+# 于是 B站 / YouTube 这类同时提供三种编码的站点**默认会给出 AV1**。
+# 本地播放没问题，但**多数社交平台不接受 AV1** —— 上传时报
+# `Something went wrong / Incompatible video codecs`，而文件本身完全正常，
+# 从下载那一步根本看不出问题（2026-10-05 实际踩到）。
+# 要发平台就显式 `--codec h264`：同分辨率、零转码、画质不降，代价是体积大 2–3 倍。
+_CODEC_PREFIX = {
+    "h264": "avc1",
+    "h265": "hvc1",
+    "av1": "av01",
+    "vp9": "vp09",
+}
+
+_MEDIA_EXTS = {".mp4", ".mkv", ".webm", ".mov", ".m4v"}
+
+
+def _codec_filter(codec):
+    """把 `--codec` 的取值翻成 yt-dlp 的 `-f` 过滤式；auto/未知 返回 None"""
+    prefix = _CODEC_PREFIX.get((codec or "").lower())
+    return f"bv*[vcodec^={prefix}]+ba/b" if prefix else None
+
+
+def _newest_media(directory):
+    """目录里最新的一个媒体文件（yt-dlp 刚下完的那个）"""
+    best, best_m = None, -1.0
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return None
+    for name in names:
+        if os.path.splitext(name)[1].lower() not in _MEDIA_EXTS:
+            continue
+        path = os.path.join(directory, name)
+        try:
+            m = os.path.getmtime(path)
+        except OSError:
+            continue
+        if m > best_m:
+            best, best_m = path, m
+    return best
+
+
+def _warn_if_not_h264(path):
+    """探一下产物的视频编码；不是 H.264 就提示一句。
+
+    这个坑很隐蔽：文件能正常播放、ffprobe 也正常，**只有上传时才炸**。
+    与其让用户在平台上撞一次，不如下载完就说清楚。
+    """
+    exe = shutil.which("ffprobe")
+    if not exe or not path:
+        return
+    try:
+        p = subprocess.run([exe, "-v", "error", "-select_streams", "v:0",
+                            "-show_entries", "stream=codec_name",
+                            "-of", "csv=p=0", path],
+                           capture_output=True, text=True, timeout=20)
+        codec = (p.stdout or "").strip()
+    except Exception:
+        return
+    if codec and codec != "h264":
+        warn(f"该文件是 {codec} 编码 —— 部分平台上传会报「不兼容的编码」")
+        info("需要上传的话，加 --codec h264 重新下载（同画质、零转码）")
+
+
+def run_ytdlp(urls, out_dir, quality, only_info, codec="auto"):
     print("=" * 62)
     print(f"  通用通道（yt-dlp） · {len(urls)} 条链接")
     print("=" * 62)
@@ -431,7 +497,8 @@ def run_ytdlp(urls, out_dir, quality, only_info):
         if only_info:
             rc = _info_one(base, url)
         else:
-            base += ["-f", "bv*+ba/b", "--merge-output-format", "mp4"]
+            base += ["-f", _codec_filter(codec) or "bv*+ba/b",
+                     "--merge-output-format", "mp4"]
             if quality:
                 # 上限用 res（= min(宽,高)）而不是 height。
                 # height 对竖屏视频是"长边"：720x1280 的 height=1280 > 1080，
@@ -440,14 +507,18 @@ def run_ytdlp(urls, out_dir, quality, only_info):
                 # 必须是 `res:N`（冒号＝硬上限），不是 `res~N`（波浪号＝取最近）。
                 base += ["-S", f"res:{quality}"]
             rc = _call_ytdlp(base, url)
-            if rc == 0 and not free:
-                try:
-                    for dst in _stage_copy(staging, out_dir):
-                        ok(f"已保存 → {dst}")
-                    _stage_cleanup(staging)
-                except Exception as e:
-                    bad(f"拷贝到目标目录失败：{e}")
-                    rc_all = 1
+            if rc == 0:
+                # 此时成品还在 staging（free 时 staging 就是 out_dir），
+                # 趁拷走之前探一下编码，给「要上传」的场景提前预警。
+                _warn_if_not_h264(_newest_media(staging))
+                if not free:
+                    try:
+                        for dst in _stage_copy(staging, out_dir):
+                            ok(f"已保存 → {dst}")
+                        _stage_cleanup(staging)
+                    except Exception as e:
+                        bad(f"拷贝到目标目录失败：{e}")
+                        rc_all = 1
         if rc != 0:
             rc_all = rc
             bad(f"退出码 {rc}")
@@ -506,6 +577,10 @@ def main():
     ap.add_argument("--out", default=None, help="输出目录，默认 ~/Downloads/视频")
     ap.add_argument("--quality", type=int, default=1080,
                     help="画面短边上限，横竖屏通用（默认 1080；设 0 表示不限制）")
+    ap.add_argument("--codec", default="auto",
+                    choices=["auto", "h264", "h265", "av1", "vp9"],
+                    help="视频编码偏好。默认 auto 让 yt-dlp 挑（通常是体积最小的 AV1）；"
+                         "要上传到社交平台请用 h264，否则可能报「不兼容的编码」")
     ap.add_argument("--update-ytdlp", action="store_true",
                     help="把自带环境里的 yt-dlp 升到最新版，然后退出")
     args = ap.parse_args()
@@ -546,7 +621,7 @@ def main():
             sys.exit(1)
         print(f"  ⤷ 通用通道（yt-dlp，最高 {args.quality}p）")
         print()
-        rc |= run_ytdlp(generic, out_dir, args.quality, args.info)
+        rc |= run_ytdlp(generic, out_dir, args.quality, args.info, args.codec)
 
     print("=" * 62)
     if rc == 0:
