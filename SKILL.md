@@ -640,6 +640,48 @@ python3 video_dl.py "<链接>" --codec h264
 **设计取舍**：默认仍是 `auto`。因为 AV1 体积小三倍，纯本地观看更划算；
 而「要上传」是明确的、可以由用户自己判断的意图，加一个开关比改默认值合适。
 
+### 18. 小红书短链必须先用**手机 UA** 展开（`xhslink.cn` / `xhslink.com`）
+
+**2026-10-06 定位。** 用户发来 App 分享的短链
+`https://xhslink.cn/o/<短ID>`，脚本直接报「没在输入里找到可识别的视频链接」——
+因为白名单里只有 `xhslink\.com/[A-Za-z0-9]+`，**`.cn` 域名整个漏掉**，
+而且 `[A-Za-z0-9]+` 不含 `/`，`xhslink.com/o/<id>` 只会匹配到
+`xhslink.com/o` 这种**被截断的假 URL**（比不匹配更糟）。
+
+补上域名后仍下不了，第二个原因更隐蔽 —— **短链有 UA 门**：
+
+| 请求 UA | 302 落点 |
+|---|---|
+| iPhone Safari | `www.xiaohongshu.com/discovery/item/<笔记ID>?…&xsec_token=<token>` ✅ |
+| 桌面 Chrome | `www.xiaohongshu.com/login?redirectPath=…` ❌ |
+
+**同一条链接、同一台机器、同一个代理，只换 UA 结果就不同**（curl 对照实验，
+两组各一次，无其他变量）。而 yt-dlp 默认发桌面 UA，所以直接把短链喂给它只会得到：
+
+```
+ERROR: Unsupported URL: https://www.xiaohongshu.com/login?redirectPath=…
+```
+
+**看着像「小红书开始要求登录了」，其实只是短链没展开。**
+
+**已修**：新增 `_resolve_shortlink()`，在下 yt-dlp 之前把短链展开 ——
+用 `curl -s -A <手机 UA> -o /dev/null -w '%{redirect_url}'` 取 302 的 `Location`
+（不跟随重定向，所以只花一个往返、不下载页面正文），
+拿到带 `xsec_token` 的完整 URL 再交给 yt-dlp。
+展开失败时**原样返回原链接**，不让「展开」这一步本身变成新的失败点。
+
+展开后 yt-dlp 的 `XiaoHongShuIE` 就能处理了 —— 它的 `_VALID_URL` 是
+`https?://www\.xiaohongshu\.com/(?:explore|discovery/item)/(?P<id>[\da-f]+)`，
+短链展开出的 `/discovery/item/<id>` 正好命中。
+
+**顺带**：这条链接的 `xsec_source=app_share`（App 分享）和之前记的
+`xsec_source=pc_feed`（PC 网页）都能下，**再次确认来源不影响可用性，
+唯一关键参数就是 `xsec_token`**。
+
+**教训**：站点级判断（「这家要不要登录」）不能只做一次。
+同一台机器上换个 UA 就能翻转结论 —— 和坑 10（换版本）、坑 12（换代理）
+是同一类错误：**把一个变量造成的现象记成了站点的性质。**
+
 ## 实测记录
 
 | 平台 | 结果 |
@@ -663,6 +705,7 @@ python3 video_dl.py "<链接>" --codec h264
 | Dailymotion（复测） | ✅ `x8nj9gm` 3:34，**未设任何环境变量**。⚠️ 但 `x8pp5wt` 报 `Not found` —— 那是链接本身失效，不是版本问题，别误判 |
 | 小红书 | ✅ 2.62 MiB，h264 720×1280 + aac，11.12s。**必须用带 `xsec_token` 的真实分享链接**，见「已知限制」 |
 | 小红书（PC 链接） | ✅ `xiaohongshu.com/explore/<笔记ID>?xsec_token=...&xsec_source=pc_feed` 64.91 MiB，h264 **720×1518** + aac，440.5s（7:20）。**PC 网页版链接即可，不需要 App**。竖屏长边 1518 > 1080，是坑 8（`res` vs `height`）的极端案例：旧写法会把它整个排除后静默降级 |
+| 小红书（短链） | ✅ `xhslink.cn/o/<短ID>`（App 分享）3,015,939 B，h264 720×1280 + aac，16.51s，30fps。**字节数与 yt-dlp `dump-json` 里的 `filesize` 完全一致**。脚本先展开成 `/discovery/item/<笔记ID>?xsec_token=...` 再下（见坑 18） |
 | 跨平台改造回归 | ✅ 抖音 `f6e7f6a5…db7243d` / YouTube `Me at the zoo`，SHA256 与改造前逐位一致 |
 
 跨平台改造的验证方式：删掉旧 venv 后从零跑抖音通道，确认
@@ -791,6 +834,9 @@ B站、Reddit、Instagram、Dailymotion 四个都栽在这上面。
   实测 2026-09-28 直接贴 `xiaohongshu.com/explore/<笔记ID>?xsec_token=...&xsec_source=pc_feed`
   一次成功（64.91 MiB / h264 720×1518 / 440.5s），无需 App。
   **判断标准只有一条：URL 里有没有 `xsec_token`。** 有就能下，没有就报 `No video formats found`。
+  **短链也可以直接贴**（2026-10-06 起）：`xhslink.com/<id>`、`xhslink.cn/o/<id>`
+  这两个域名已进白名单，脚本会**先用手机 UA 展开**成带 `xsec_token` 的完整 URL
+  再交给 yt-dlp（原因见坑 18 —— 桌面 UA 会被弹到登录页）。
 - **~~优酷必须带 `Referer`~~ —— 该结论已于 2026-09-28 纠正：现在不需要任何额外参数。**
   当天用同一条链接做对照实验，带 / 不带 `--referer "https://v.youku.com/"` 各真实下载一次，
   产物**逐位一致**（182,316,336 B，SHA256 `93b1b16a…7947`）。
@@ -882,7 +928,9 @@ B站、Reddit、Instagram、Dailymotion 四个都栽在这上面。
 | **任何站点突然 `HTTP Error 412` / 解析失败** | **先查 `yt-dlp --version` 对比最新版**，多半是版本旧了，别怀疑站点封了你（见坑 10） |
 | 微信视频号链接（`weixin.qq.com/sph/...`） | **脚本下不了，不用试**。网页端是启动器不是播放器，官方播放页拒绝一切浏览器，Mac 客户端也不落盘。**但用户要的是拿到视频**——直接给「已知限制 → 视频号想下载怎么办」那套办法（手机端保存到相册 / 录屏） |
 | 解析成功但下载阶段 `HTTP Error 403` | **先用 curl 打一下那个 CDN 地址**。curl 能下而 yt-dlp 不能 → 沙箱代理干的，脚本已自动 `--proxy ""` 重试（见坑 12） |
-| 小红书报 `No video formats found` | 链接缺 `xsec_token`。要用 App「分享 → 复制链接」的完整 URL，别手打短链 |
+| 小红书报 `No video formats found` | 链接缺 `xsec_token`。要用 App「分享 → 复制链接」的完整 URL，或直接贴短链（脚本会展开，见坑 18） |
+| 小红书短链报 `Unsupported URL: …/login?redirectPath=…` | 短链没展开就被喂给了 yt-dlp。**别据此判断「小红书要登录了」**——同一条链接换手机 UA 就能正常打开。脚本已内置 `_resolve_shortlink()` 展开（见坑 18） |
+| 小红书短链报「没在输入里找到可识别的视频链接」 | 2026-10-06 前的旧版只认 `xhslink.com`，不认 `xhslink.cn`，且 `/o/<id>` 路径会被截断。白名单已改为 `xhslink\.(?:com\|cn)/[A-Za-z0-9/]+` |
 | `--info` 显示 `NA秒 \| NA` 或通用占位标题 | **不是下载失败**，是该站点提取器不返回元数据（腾讯视频典型）。已改为显示「该站点未提供」。**别拿它推断站点能不能下**，要真实下载验证（见坑 13） |
 | `--info` 报「该链接解析结果为空」 | 多半是**专辑/播放列表页**（腾讯视频 `/x/cover/<cid>.html`）。该形态走 `vqq:series`，提取器已失效，**退出码 0 但无输出**。换成单集页 `/x/page/<vid>.html`（见坑 14） |
 | 腾讯视频下不了，但别人说能下 | **先看链接形态**：`/x/page/<vid>.html` 能下；`/x/cover/<cid>.html` 专辑页不能下；专辑内分集看该集是否付费 |

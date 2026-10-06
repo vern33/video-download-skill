@@ -122,7 +122,13 @@ GENERIC_RE = re.compile(
     r"(?:bbs|www|m|nba|voice)\.hupu\.com/[^\s\u4e00-\u9fff]+|"
     r"hupu\.com/[^\s\u4e00-\u9fff]+|"
     r"(?:www\.)?xiaohongshu\.com/[^\s\u4e00-\u9fff]+|"
-    r"xhslink\.com/[A-Za-z0-9]+|"
+    # 短链两个域名都要收：App 分享出来的是 `xhslink.com/<id>`，
+    # 而从别处复制到的常是 `xhslink.cn/o/<id>`（2026-10-06 实际遇到）。
+    # 旧写法 `xhslink\.com/[A-Za-z0-9]+` 有两处不对：
+    #   ① 只认 `.com`，`.cn` 直接漏掉；
+    #   ② `[A-Za-z0-9]+` 不含 `/`，`xhslink.com/o/<id>` 只会匹配到
+    #      `xhslink.com/o` 这种**被截断的假 URL**（比不匹配更糟）。
+    r"xhslink\.(?:com|cn)/[A-Za-z0-9/]+|"
     # X / Twitter：www. / m. / mobile. 前缀，以及第三方镜像域名
     # （fxtwitter / vxtwitter / fixupx / twittpr 会 302 到 x.com，yt-dlp 跟得上）
     r"(?:www\.|m\.|mobile\.)?(?:twitter|x)\.com/[^\s\u4e00-\u9fff]+|"
@@ -308,6 +314,56 @@ def _has_proxy_env():
                 "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"))
 
 
+# 小红书短链：必须先**用手机 UA** 展开成完整笔记页 URL 再交给 yt-dlp。
+#
+# 2026-10-06 实测，同一条链接 / 同一台机器 / 同一个代理，**只换 UA** 结果就不同：
+#
+#   | UA | 302 落点 |
+#   |---|---|
+#   | iPhone Safari | `/discovery/item/<id>?…&xsec_token=<token>` ✅ |
+#   | 桌面 Chrome | `/login?redirectPath=…` ❌ |
+#
+# 而 yt-dlp 默认发桌面 UA，所以直接把短链喂给它只会得到
+# `ERROR: Unsupported URL: https://www.xiaohongshu.com/login?...` ——
+# 看着像「小红书不让下」，其实是短链没展开。
+# 展开成带 `xsec_token` 的完整 URL 后，yt-dlp 的 `XiaoHongShuIE` 就能处理
+# （它的 `_VALID_URL` 是 `/(?:explore|discovery/item)/(?P<id>[\da-f]+)`）。
+_XHS_SHORT_RE = re.compile(r"https?://xhslink\.(?:com|cn)/[A-Za-z0-9/]+")
+
+_XHS_MOBILE_UA = ("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+                  "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
+                  "Mobile/15E148 Safari/604.1")
+
+
+def _resolve_shortlink(url):
+    """把小红书短链换成真正的笔记页 URL（带 `xsec_token`）。
+
+    只处理短链，其他链接原样返回。展开失败也原样返回 ——
+    宁可让 yt-dlp 去试，也不要因为「展开」这一步出问题而把能下的链接丢掉。
+    """
+    if not _XHS_SHORT_RE.fullmatch(url):
+        return url
+    curl = shutil.which("curl")
+    if not curl:
+        return url
+    try:
+        p = subprocess.run(
+            [curl, "-s", "-A", _XHS_MOBILE_UA, "-o", os.devnull,
+             "-w", "%{redirect_url}", "--max-time", "20", url],
+            capture_output=True, text=True, timeout=30)
+    except Exception:
+        return url
+    target = (p.stdout or "").strip()
+    # 落到 /login 说明 UA 没生效或链接失效，这时展开结果没用，交回原链接。
+    if target.startswith("http") and "/login" not in target:
+        # 展开结果马上会在下面 `[1/1] <url>` 那行完整打印一遍，
+        # 这里截断，避免一条带 xsec_token 的长 URL 刷屏两遍。
+        info(f"短链已展开 → {target[:88]}{'…' if len(target) > 88 else ''}")
+        return target
+    warn("短链展开失败（可能链接已失效），仍按原链接尝试")
+    return url
+
+
 def _call_ytdlp(base, url):
     """跑一次 yt-dlp；失败且环境里有代理时，绕过代理再试一次。
 
@@ -474,6 +530,7 @@ def run_ytdlp(urls, out_dir, quality, only_info, codec="auto"):
 
     rc_all = 0
     for idx, url in enumerate(urls, 1):
+        url = _resolve_shortlink(url)
         print(f"[{idx}/{len(urls)}] {url}")
         if not free:
             for name in os.listdir(staging):
