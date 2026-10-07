@@ -292,11 +292,32 @@ def pick_mp4(detail):
     return None
 
 
-def safe_name(title, vid):
-    clean = re.sub(r"#[^\s#]+", "", title or "")
+# 文件名尾部要去掉的字符。**必须包含标点**：
+# 标题以 `.` 结尾时（如「…只剩下最后三个月了.」），拼上 `.mp4` 会变成 `…了..mp4`，
+# 而 macOS 会把双点后的部分当扩展名。原先只 strip("_ ") 清不掉标点（2026-10-07 实测）。
+_TRAILING_JUNK = "._-·．。，,、;；:：!！?？~～ \t"
+
+
+def safe_name(title, vid, limit=60):
+    """标题 → 安全文件名。
+
+    三个坑，都是实测踩出来的：
+      ① 话题标签只去掉 `#` 号、**保留文字**。不能用 `#[^\\s#]+` 整段删 ——
+         标签后面若没有空格，那个字符类会一路吃到行尾，把整段标题吞掉。
+      ② 超长要截断，但要补 `…`，否则用户不知道名字被改过。
+      ③ 末尾标点必须清掉，否则 `标题.` + `.mp4` = `标题..mp4`。
+    """
+    clean = re.sub(r"#([^\s#]+)", r"\1", title or "")
     clean = re.sub(r"\s+", " ", clean).strip()
-    clean = re.sub(r'[\\/:*?"<>|]', "_", clean)[:60].strip("_ ")
-    return clean or vid
+    clean = re.sub(r'[\\/:*?"<>|]', "_", clean).strip()
+    if len(clean) > limit:
+        clean = clean[:limit].rstrip() + "…"
+    clean = clean.strip(_TRAILING_JUNK)
+    # 清洗后只剩标点符号（如 "#"、"..."）时，退回 video_id ——
+    # 否则会产出 `#.mp4` 这种既无信息又难认的文件名。
+    if not re.search(r"[0-9A-Za-z\u4e00-\u9fff]", clean):
+        return vid
+    return clean
 
 
 def write_cookies(cookies, path):
