@@ -108,6 +108,12 @@ DOUYIN_RE = re.compile(
     r"(?:www\.)?douyin\.com/video/\d+|"
     r"(?:www\.)?iesdouyin\.com/share/video/\d+)")
 
+# 微信视频号：短链 301 到 finder-preview 空壳页，浏览器侧永远拿不到视频地址。
+# 单独分流给 _sph.py 的「跨平台转载」兜底通道；不能放进 GENERIC_RE，
+# 因为 yt-dlp 没有对应提取器，喂过去只会白等一轮然后报 unsupported URL。
+SPH_RE = re.compile(
+    r"https?://(?:www\.)?weixin\.qq\.com/sph/([A-Za-z0-9_\-]+)")
+
 # 通用链接（yt-dlp 能处理的）
 GENERIC_RE = re.compile(
     r"https?://(?:"
@@ -221,6 +227,16 @@ def extract_urls(texts):
     return douyin, generic
 
 
+def find_sph_ids(texts):
+    """从分享文本里找出视频号短链 ID（这类链接不能被 yt-dlp 处理）"""
+    ids = []
+    for t in texts:
+        for sid in SPH_RE.findall(t):
+            if sid not in ids:
+                ids.append(sid)
+    return ids
+
+
 def has_ytdlp():
     return _env.ytdlp_bin() is not None
 
@@ -267,6 +283,21 @@ def run_douyin(urls, out_dir, only_info):
     ensure_env()          # 只有走抖音通道才需要 venv，避免通用链接用户被强建环境
     script = os.path.join(HERE, "_douyin.py")
     cmd = [sys.executable, script] + urls + ["--out", out_dir]
+    if only_info:
+        cmd.append("--info")
+    return subprocess.call(cmd)
+
+
+def run_sph(pages, out_dir, title, sph_id, only_info):
+    """微信视频号兜底：把找到的跨平台转载页交给 _sph.py 解析直链并下载"""
+    script = os.path.join(HERE, "_sph.py")
+    cmd = [sys.executable, script, "--out", out_dir]
+    for page in pages:
+        cmd += ["--page", page]
+    if title:
+        cmd += ["--title", title]
+    if sph_id:
+        cmd += ["--sph-id", sph_id]
     if only_info:
         cmd.append("--info")
     return subprocess.call(cmd)
@@ -640,6 +671,10 @@ def main():
                          "要上传到社交平台请用 h264，否则可能报「不兼容的编码」")
     ap.add_argument("--update-ytdlp", action="store_true",
                     help="把自带环境里的 yt-dlp 升到最新版，然后退出")
+    ap.add_argument("--page", action="append", default=[],
+                    help="微信视频号用的跨平台转载页 URL，可重复；依次尝试第一个成功的")
+    ap.add_argument("--title", default=None,
+                    help="转载产物命名用的标题（默认从分享文本里抠）")
     args = ap.parse_args()
 
     if args.update_ytdlp:
@@ -653,7 +688,13 @@ def main():
         sys.exit(1)
 
     douyin, generic = extract_urls(args.input)
-    if not douyin and not generic:
+    sph_ids = find_sph_ids(args.input)
+    if not douyin and not generic and not args.page:
+        if sph_ids:
+            bad("这是微信视频号链接，微信不向浏览器提供视频地址，无法直接下载")
+            info("把分享文本里的标题/作者名一起贴来，搜到跨平台转载页后用 --page <URL> 传入")
+            info("或改用手机端「保存到相册」/ 录屏")
+            sys.exit(2)
         bad("没在输入里找到可识别的视频链接")
         info("抖音：v.douyin.com/xxx、douyin.com/video/数字ID")
         info("其他：YouTube / B站 / 腾讯视频 / 小红书 / X / Vimeo 等")
@@ -663,11 +704,19 @@ def main():
 
     print()
     print("=" * 62)
-    print(f"  视频下载  ·  抖音 {len(douyin)} 条  ·  其他 {len(generic)} 条")
+    print(f"  视频下载  ·  抖音 {len(douyin)} 条  ·  其他 {len(generic)} 条"
+          f"  ·  转载页 {len(args.page)} 条")
     print("=" * 62)
     print()
 
     rc = 0
+    if args.page:
+        print("  ⤷ 转载页通道（微信视频号兜底）")
+        print()
+        rc |= run_sph(args.page, out_dir, args.title,
+                      sph_ids[0] if sph_ids else None, args.info)
+    if sph_ids and not args.page:
+        warn("检测到微信视频号链接但没有转载页，这条已跳过（见上方说明）")
     if douyin:
         print(f"  ⤷ 抖音通道（浏览器方案）")
         rc |= run_douyin(douyin, out_dir, args.info)
